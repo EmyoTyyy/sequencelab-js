@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SequenceLab — local SQLite workbench</title>
+  <link rel="stylesheet" href="static/css/styles.css" />
+  <link id="favicon" rel="icon" type="image/png" href="static/img/logo-128.png" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- ===================== TOP MENU BAR ===================== -->
+  <header class="menubar">
+    <div class="menu-left">
+      <img class="menu-logo" src="static/img/logo-128.png" alt="SequenceLab logo" />
+      <button class="menu-item" data-menu="file">File</button>
+      <button class="menu-item" data-menu="edit">Edit</button>
+      <button class="menu-item" data-menu="view">View</button>
+      <button class="menu-item" data-menu="help">Help</button>
+    </div>
+    <div class="menu-title">Se<span class="brand-accent">Q</span>uenceLab</div>
+    <div class="menu-right">
+      <button id="btnTogglePanel" class="btn icon menu-tool" data-icon="panel-left" title="Show/hide side panel (Alt+S)"></button>
+      <button id="btnToggleJson" class="btn icon menu-tool" data-icon="panel-right" title="Show/hide JSON row viewer"></button>
+    </div>
+  </header>
+
+  <div class="app-body">
+
+    <!-- ===================== ICON RAIL ===================== -->
+    <nav class="rail" aria-label="Primary">
+      <div class="rail-inner">
+        <div class="rail-group" id="railGroupEditor">
+          <button class="rail-btn active" data-rail="editor" data-icon="database" title="Database & SQL editor"><span class="rail-label">Editor</span></button>
+          <div class="rail-sub">
+            <button class="rail-btn" data-rail="files" data-icon="folder" title="File explorer"><span class="rail-label">Files</span></button>
+            <button class="rail-btn" data-rail="snippets" data-icon="bookmark" title="Saved snippets"><span class="rail-label">Snippets</span></button>
+            <button class="rail-btn" data-rail="history" data-icon="clock" title="Query history"><span class="rail-label">History</span></button>
+            <button class="rail-btn" data-rail="syntax" data-icon="book" title="SQL syntax reference"><span class="rail-label">Syntax</span></button>
+          </div>
+        </div>
+        <div class="rail-group" id="railGroupBrowse">
+          <button class="rail-btn" data-rail="browse" data-icon="table" title="Browse data"><span class="rail-label">Browse</span></button>
+          <div class="rail-sub">
+            <button class="rail-btn" data-rail="bfilters" data-icon="filter" title="Saved filters"><span class="rail-label">Filters</span></button>
+          </div>
+        </div>
+        <div class="rail-group" id="railGroupDiagram">
+          <button class="rail-btn" data-rail="diagram" data-icon="diagram" title="ER diagram"><span class="rail-label">Diagram</span></button>
+          <div class="rail-sub">
+            <button class="rail-btn" data-rail="dlayouts" data-icon="layout" title="Saved layouts"><span class="rail-label">Layouts</span></button>
+            <button class="rail-btn" data-rail="dnotes" data-icon="note" title="Legend & notes"><span class="rail-label">Notes</span></button>
+          </div>
+        </div>
+        <div class="rail-spacer"></div>
+        <button class="rail-btn" id="btnSettings" data-icon="gear" title="Settings"><span class="rail-label">Settings</span></button>
+      </div>
+    </nav>
+
+    <!-- ===================== EDITOR VIEW ===================== -->
+    <div class="layout">
+
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-top">
+          <button id="dbSelect" class="db-select" title="Active database" aria-haspopup="menu">
+            <span class="db-select-label" id="dbSelectLabel"></span>
+            <span class="db-select-caret" data-icon="chevron-down" aria-hidden="true"></span>
+          </button>
+          <button id="btnRefreshSchema" class="btn icon" data-icon="refresh" title="Refresh schema"></button>
+        </div>
+        <div class="sidebar-filter">
+          <input id="schemaFilter" class="mini-input" placeholder="Filter" />
+          <span class="filter-ico" data-icon="filter" aria-hidden="true"></span>
+        </div>
+
+        <div class="sidebar-body">
+          <!-- Schema: pinned + entities -->
+          <section class="side-panel active" data-side="schema">
+            <div class="side-section" id="pinnedSection">
+              <div class="side-section-head" data-sec="pinned">
+                <span class="sec-caret" data-icon="chevron"></span>
+                <span class="sec-label">Pinned</span>
+                <span class="sec-count" id="pinnedCount">0</span>
+              </div>
+              <div id="pinnedList" class="sec-body"></div>
+            </div>
+            <div class="side-section" id="entitiesSection">
+              <div class="side-section-head" data-sec="entities">
+                <span class="sec-caret" data-icon="chevron"></span>
+                <span class="sec-label">Entities</span>
+                <span class="sec-count" id="entityCount">0</span>
+              </div>
+              <div id="schemaTree" class="schema-tree sec-body"></div>
+            </div>
+          </section>
+
+          <!-- History -->
+          <section class="side-panel" data-side="history">
+            <div class="side-toolbar">
+              <span class="side-hint">Recent queries</span>
+              <button id="btnClearHistory" class="btn icon" data-icon="trash" title="Clear history"></button>
+            </div>
+            <div id="historyList" class="history-list"></div>
+          </section>
+
+          <!-- Syntax reference -->
+          <section class="side-panel" data-side="syntax">
+            <div class="side-toolbar">
+              <input id="syntaxFilter" class="mini-input" placeholder="Filter syntax…" />
+            </div>
+            <div id="syntaxList" class="syntax-list"></div>
+          </section>
+
+          <!-- File explorer -->
+          <section class="side-panel" data-side="files">
+            <div class="side-toolbar">
+              <span class="side-hint" id="filesHint">data/</span>
+              <button id="btnRefreshFiles" class="btn icon" data-icon="refresh" title="Refresh files"></button>
+            </div>
+            <div id="fileList" class="file-list"></div>
+          </section>
+
+          <!-- Snippets -->
+          <section class="side-panel" data-side="snippets">
+            <div class="side-toolbar">
+              <span class="side-hint">Saved snippets</span>
+              <button id="btnSaveSnippet" class="btn icon" data-icon="plus" title="Save current editor as snippet"></button>
+            </div>
+            <div id="snippetList" class="snippet-list"></div>
+          </section>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <div class="query-tabbar">
+          <div class="query-tabs" id="queryTabs"></div>
+          <div class="run-split">
+            <button id="btnRun" class="btn primary" data-icon="play" title="Run (Ctrl+Enter)">Run</button>
+            <button id="btnRunMenu" class="btn primary run-caret" data-icon="chevron-down" title="Run options"></button>
+          </div>
+        </div>
+
+        <section class="editor-pane">
+          <div class="find-bar" id="findBar" hidden>
+            <span class="find-ico" data-icon="search" aria-hidden="true"></span>
+            <input id="findInput" class="mini-input" placeholder="Find" aria-label="Find in editor" />
+            <span id="findCount" class="find-count">0/0</span>
+            <button id="findPrev" class="btn icon" data-icon="chevron-up" title="Previous match (Shift+Enter)"></button>
+            <button id="findNext" class="btn icon" data-icon="chevron-down" title="Next match (Enter)"></button>
+            <input id="replInput" class="mini-input" placeholder="Replace with" aria-label="Replace with" />
+            <button id="replOne" class="btn ghost">Replace</button>
+            <button id="replAll" class="btn ghost">All</button>
+            <button id="findClose" class="btn icon" data-icon="x" title="Close (Esc)"></button>
+          </div>
+          <div class="editor-host">
+            <div class="cm-gutter" aria-hidden="true"><div class="cm-gutter-inner" id="gutterInner">1</div></div>
+            <pre id="highlight" class="cm-highlight" aria-hidden="true"><code></code></pre>
+            <textarea id="sqlInput" class="cm-input" spellcheck="false" wrap="off"
+                      autocomplete="off" autocapitalize="off" autocorrect="off"
+                      placeholder="-- Write SQL here.  Ctrl+Enter to run."></textarea>
+            <div id="acDropdown" class="ac-dropdown" hidden></div>
+          </div>
+        </section>
+
+        <section class="results-pane">
+          <div class="results-tabs" id="resultsTabs"></div>
+          <div class="results-body" id="resultsBody"></div>
+        </section>
+      </main>
+    </div>
+
+    <!-- ===================== BROWSE VIEW ===================== -->
+    <div class="browse-view" id="browseView" hidden>
+      <aside class="browse-side">
+        <div class="side-sub-panel" data-bs="tables">
+          <div class="side-toolbar">
+            <input id="browseFilter" class="mini-input" placeholder="Filter" />
+            <button id="browseRefresh" class="btn icon" data-icon="refresh" title="Refresh"></button>
+          </div>
+          <div id="browseTableList" class="browse-table-list"></div>
+        </div>
+        <div class="side-sub-panel" data-bs="filters" hidden>
+          <div class="side-toolbar">
+            <span class="side-hint">Saved filters</span>
+            <button id="bfSave" class="btn icon" data-icon="plus" title="Save the current table + WHERE filter"></button>
+          </div>
+          <div id="browseFilterList" class="bf-list"></div>
+        </div>
+      </aside>
+      <div class="browse-main" id="browseMain">
+        <div class="empty-state">
+          <div class="empty-emoji">▦</div>
+          <p>Pick a table on the left to browse and edit its rows. Right-click any cell for actions.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DIAGRAM VIEW ===================== -->
+    <div class="diagram-view" id="diagramView" hidden>
+      <aside class="diagram-side">
+        <div class="side-sub-panel" data-ds="tables">
+          <div class="side-toolbar">
+            <span class="side-hint">Tables</span>
+            <button id="erNewTable" class="btn icon" data-icon="plus" title="New table"></button>
+          </div>
+          <div id="erTableList" class="er-table-list"></div>
+          <div id="erEditor" class="er-editor"></div>
+        </div>
+        <div class="side-sub-panel" data-ds="layouts" hidden>
+          <div class="side-toolbar">
+            <span class="side-hint">Saved layouts</span>
+            <button id="erLayoutSave" class="btn icon" data-icon="plus" title="Save the current arrangement"></button>
+          </div>
+          <div id="erLayoutList" class="bf-list"></div>
+        </div>
+        <div class="side-sub-panel" data-ds="notes" hidden>
+          <div class="side-toolbar">
+            <span class="side-hint">Legend &amp; notes</span>
+          </div>
+          <div id="erLegend" class="er-legend"></div>
+        </div>
+      </aside>
+
+      <div class="diagram-main">
+        <div class="diagram-toolbar">
+          <button id="erAutoLayout" class="btn ghost" data-icon="layout" title="Re-arrange tables">Auto-layout</button>
+          <button id="erFit" class="btn ghost" data-icon="maximize" title="Fit & center">Fit</button>
+          <span class="toolbar-spacer"></span>
+          <span class="er-zoom-label">Zoom</span>
+          <button id="erZoomOut" class="btn icon" data-icon="minus"></button>
+          <span id="erZoomVal" class="er-zoom-val">100%</span>
+          <button id="erZoomIn" class="btn icon" data-icon="plus"></button>
+          <button id="erExportSvg" class="btn ghost" data-icon="download" title="Download diagram as SVG">SVG</button>
+          <button id="erExportPng" class="btn primary" data-icon="download" title="Download diagram as PNG">PNG</button>
+        </div>
+        <div class="diagram-canvas" id="erCanvas">
+          <div class="er-pan" id="erPan">
+            <svg class="er-lines" id="erLines"></svg>
+            <div class="er-cards" id="erCards"></div>
+            <div class="er-notes" id="erNotes"></div>
+          </div>
+          <div class="er-empty" id="erEmpty" hidden>
+            <div class="empty-emoji">▦</div>
+            <p>No tables to diagram yet.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== JSON ROW VIEWER ===================== -->
+    <aside class="json-panel" id="jsonPanel" hidden>
+      <div class="side-toolbar">
+        <span class="side-hint">Row JSON</span>
+        <button id="jsonClose" class="btn icon" data-icon="x" title="Close"></button>
+      </div>
+      <pre id="jsonBody" class="json-body"><span class="json-empty">Click a row in a result grid or the Browse view to inspect it as JSON.</span></pre>
+    </aside>
+
+  </div>
+
+  <!-- ===================== STATUS BAR ===================== -->
+  <footer class="statusbar">
+    <span id="dbInfo" class="status-item"></span>
+    <span class="status-spacer"></span>
+    <span id="sqliteVer" class="status-item"></span>
+    <span id="editorStatus" class="status-item"></span>
+  </footer>
+
+  <!-- context menu (shared: data grid, entities, menus) + flyout submenu -->
+  <div class="ctx-menu" id="ctxMenu" hidden></div>
+  <div class="ctx-menu" id="ctxSub" hidden></div>
+
+  <!-- ===================== MODALS ===================== -->
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal" id="modal">
+      <div class="modal-head">
+        <h3 id="modalTitle">Title</h3>
+        <button class="btn icon" id="modalClose" data-icon="x"></button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot" id="modalFoot"></div>
+    </div>
+  </div>
+
+  <!-- toast -->
+  <div id="toast" class="toast" hidden></div>
+
+  <!-- sql.js: real SQLite compiled to WebAssembly, vendored locally.
+       file:// can't fetch .wasm, so the pure-JS build is used there. -->
+  <script>
+    document.write('<script src="static/vendor/' +
+      (location.protocol === "file:" ? "sql-asm.js" : "sql-wasm.js") +
+      '"><\/script>');
+  </script>
+  <script src="static/js/icons.js"></script>
+  <script src="static/js/api.js"></script>
+  <script src="static/js/editor.js"></script>
+  <script src="static/js/diagram.js"></script>
+  <script src="static/js/syntax.js"></script>
+  <script src="static/js/app.js"></script>
+</body>
+</html>
