@@ -83,6 +83,9 @@
     // navy-stroke logo on light themes, light-stroke variant on dark ones
     const logo = $(".menu-logo");
     if (logo) logo.src = LIGHT_THEMES.includes(id) ? "static/img/logo-128.png" : "static/img/logo-dark-128.png";
+    // keep the PWA / browser-chrome color in step with the active theme
+    const meta = $("#themeColor");
+    if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
     if (window.ERD && ERD.refreshTheme) ERD.refreshTheme();
   }
 
@@ -507,6 +510,7 @@
       if (editor) editor.setSchema(state.schema);
     }
     state.tables = tablesRes.tables || [];
+    invalidateRelCache();
     renderSchemaTree(state.tables, tablesRes.error);
   }
 
@@ -1561,6 +1565,9 @@
 
   function buildTable(tab, rows) {
     const columns = tab.columns;
+    if (tab._editAnalysis === undefined) tab._editAnalysis = analyzeEditable(tab.statement);
+    const srcTable = tab._editAnalysis ? tab._editAnalysis.table : null;
+    const editable = !!tab._editAnalysis && !(tab.edit && tab.edit.bad);
     const table = el("table", "grid");
     const thead = el("thead");
     const htr = el("tr");
@@ -1586,16 +1593,99 @@
       const tr = el("tr");
       tr.appendChild(el("td", "rownum", i + 1));
       const arr = Array.isArray(r) ? r : columns.map((c) => r[c.name]);
-      arr.forEach((v) => tr.appendChild(cellTd(v)));
+      const origIndex = editable ? tab.rows.indexOf(r) : -1;
+      arr.forEach((v, ci) => {
+        const td = cellTd(v);
+        if (editable && !isBlob(v)) {
+          td.classList.add("editable");
+          td.ondblclick = () => beginEditResult(td, tab, origIndex, columns[ci].name, v);
+        }
+        tr.appendChild(td);
+      });
       tr.onclick = () => {
         const obj = {};
         columns.forEach((c, ci) => (obj[c.name] = arr[ci]));
-        showRowJson(obj, tr);
+        showRecord(obj, tr, srcTable);
       };
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
     return table;
+  }
+
+  // ---- inline-editable result grids (simple single-table SELECTs only) ----
+  // returns { table, rewrite } when the statement is a single-table SELECT of
+  // plain columns (no joins / aggregates / expressions), else null. The rewrite
+  // adds rowid so each displayed row maps back to a real row for updates.
+  function analyzeEditable(statement) {
+    if (!statement) return null;
+    const s = statement.trim().replace(/;+\s*$/, "");
+    if (/\b(join|union|intersect|except)\b/i.test(s)) return null;
+    if (/\bgroup\s+by\b/i.test(s)) return null;
+    const m = /^select\s+([\s\S]+?)\s+from\s+("[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_]\w*)\s*(?:where\b[\s\S]*|order\s+by\b[\s\S]*|limit\b[\s\S]*)?$/i.exec(s);
+    if (!m) return null;
+    const list = m[1].trim();
+    if (/^distinct\b/i.test(list)) return null;
+    if (list !== "*" && !list.split(",").every((c) =>
+      /^\s*("[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_]\w*)\s*$/.test(c))) return null;
+    const table = m[2].replace(/^["`\[]/, "").replace(/["`\]]$/, "");
+    return { table, rewrite: s.replace(/^select\s+/i, (kw) => kw + "rowid AS __rowid__, ") };
+  }
+
+  // rowids aligned to tab.rows; caches { table, rowids } or { bad: true }
+  async function ensureRowids(tab) {
+    if (tab.edit) return tab.edit;
+    const a = tab._editAnalysis;
+    if (!a) return (tab.edit = { bad: true });
+    let res;
+    try { res = await API.query(state.db, a.rewrite, false, false); }
+    catch (_) { return (tab.edit = { bad: true }); }
+    const r = res && res.results && res.results[0];
+    if (res.error || !r || r.kind !== "rows" || r.row_count !== tab.rows.length)
+      return (tab.edit = { bad: true });
+    const idx = r.columns.indexOf("__rowid__");
+    if (idx < 0) return (tab.edit = { bad: true });
+    return (tab.edit = { table: a.table, rowids: r.rows.map((row) => row[idx]) });
+  }
+
+  async function beginEditResult(td, tab, rowIndex, col, oldVal) {
+    if (td.classList.contains("editing")) return;
+    if (S.readOnly) return toast("Read-only mode is on (see Settings).", "err");
+    const info = await ensureRowids(tab);
+    if (info.bad || rowIndex < 0 || info.rowids[rowIndex] == null) {
+      toast("This result can't be edited inline.", "err");
+      renderActiveResult();
+      return;
+    }
+    td.classList.add("editing");
+    const input = el("input", "cell-edit");
+    input.type = "text";
+    input.value = oldVal === null || oldVal === undefined ? "" : String(oldVal);
+    td.textContent = "";
+    td.appendChild(input);
+    input.focus(); input.select();
+    let done = false;
+    const commit = async () => {
+      if (done) return; done = true;
+      const val = input.value === "" ? null : input.value;
+      const res = await API.updateRow(state.db, info.table, { __rowid__: info.rowids[rowIndex] }, { [col]: val });
+      if (res.error) { toast(res.error, "err"); renderActiveResult(); return; }
+      const ci = tab.columns.findIndex((c) => c.name === col);
+      if (ci >= 0) tab.rows[rowIndex][ci] = val;
+      toast("Saved", "ok");
+      renderActiveResult();
+      if (!$("#browseView").hidden && browse.table === info.table) reloadBrowse();
+    };
+    const cancel = () => {
+      if (done) return; done = true;
+      td.classList.remove("editing");
+      td.textContent = oldVal === null || oldVal === undefined ? S.nullDisplay : String(oldVal);
+    };
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    };
+    input.onblur = commit;
   }
 
   // ---- quick chart (canvas, no libs) ----
@@ -2021,7 +2111,7 @@
       tr.onclick = () => {
         const obj = {};
         r.columns.forEach((c) => (obj[c.name] = row[c.name]));
-        showRowJson(obj, tr);
+        showRecord(obj, tr, browse.table);
       };
       tbody.appendChild(tr);
     });
@@ -2348,7 +2438,7 @@
     else document.documentElement.requestFullscreen();
   }
 
-  // ============================================================ JSON ROW VIEWER
+  // ============================================================ RECORD / ROW VIEWER
   function toggleJsonPanel(force) {
     const p = $("#jsonPanel");
     p.hidden = force !== undefined ? !force : !p.hidden;
@@ -2357,6 +2447,11 @@
   $("#btnToggleJson").onclick = () => toggleJsonPanel();
   $("#jsonClose").onclick = () => toggleJsonPanel(false);
   $("#btnTogglePanel").onclick = toggleSidebar;
+  $$("#recModes .rec-mode").forEach((b) => (b.onclick = () => {
+    record.mode = b.dataset.recmode;
+    localStorage.setItem("sl.recmode", record.mode);
+    renderRecord();
+  }));
 
   function jsonHtml(obj) {
     const s = esc(JSON.stringify(obj, null, 2));
@@ -2370,12 +2465,171 @@
         return `<span class="json-null">${kw}</span>`;
       });
   }
-  function showRowJson(obj, tr) {
-    $("#jsonBody").innerHTML = jsonHtml(obj);
+  // the right-side panel: a clicked row as a card + its FK-related rows.
+  // `table` is the row's source table (known in Browse, and in single-table
+  // result grids); without it we still show the card + JSON, just no relations.
+  const record = { obj: null, table: null, mode: localStorage.getItem("sl.recmode") || "card" };
+  const REL_LIMIT = 6;
+  const recLit = (v) => (typeof v === "number" ? String(v) : "'" + String(v).replace(/'/g, "''") + "'");
+
+  let relCache = { db: null, dia: null, sch: {} };
+  function invalidateRelCache() { relCache = { db: null, dia: null, sch: {} }; }
+  function relCacheFor() {
+    if (relCache.db !== state.db) relCache = { db: state.db, dia: null, sch: {} };
+    return relCache;
+  }
+  async function relSchema(table) {
+    const c = relCacheFor();
+    if (!c.sch[table]) c.sch[table] = await API.schema(state.db, table);
+    return c.sch[table];
+  }
+  async function relDiagram() {
+    const c = relCacheFor();
+    if (!c.dia) c.dia = await API.diagram(state.db);
+    return c.dia;
+  }
+
+  function showRecord(obj, tr, table) {
+    record.obj = obj;
+    record.table = table || null;
     if (tr) {
       [...tr.parentElement.children].forEach((s) => s.classList.remove("row-selected"));
       tr.classList.add("row-selected");
     }
+    toggleJsonPanel(true);
+    renderRecord();
+  }
+
+  function renderRecord() {
+    const body = $("#recBody"), title = $("#recTitle");
+    $$("#recModes .rec-mode").forEach((b) => b.classList.toggle("active", b.dataset.recmode === record.mode));
+    if (!record.obj) {
+      body.innerHTML = `<div class="rec-empty">Click a row in a result grid or the Browse view to inspect it and follow its foreign-key relations.</div>`;
+      title.textContent = "Row";
+      return;
+    }
+    title.textContent = record.table || "Row";
+    if (record.mode === "json") {
+      body.innerHTML = `<pre class="json-body">${jsonHtml(record.obj)}</pre>`;
+      return;
+    }
+    renderRecordCard(body);
+  }
+
+  function renderRecordCard(body) {
+    const obj = record.obj;
+    body.innerHTML = "";
+    const card = el("div", "rec-card");
+    const fields = el("div", "rec-section");
+    card._fieldByCol = {};
+    Object.keys(obj).forEach((k) => {
+      if (k === "__rowid__") return;
+      const f = el("div", "rec-field");
+      f.appendChild(el("span", "rec-k", esc(k)));
+      const v = obj[k];
+      const vEl = el("span", "rec-v");
+      if (v === null || v === undefined) { vEl.className = "rec-v rec-null"; vEl.textContent = S.nullDisplay; }
+      else if (isBlob(v)) vEl.textContent = `BLOB · ${v.size} B`;
+      else vEl.textContent = String(v);
+      f.appendChild(vEl);
+      const slot = el("span", "rec-fk-slot");
+      f.appendChild(slot);
+      card._fieldByCol[k] = slot;
+      fields.appendChild(f);
+    });
+    card.appendChild(fields);
+    body.appendChild(card);
+    if (record.table) loadRelations(card, obj);
+  }
+
+  async function loadRelations(card, obj) {
+    let sch, dia;
+    try { [sch, dia] = await Promise.all([relSchema(record.table), relDiagram()]); }
+    catch (_) { return; }
+    if (record.obj !== obj) return; // a newer row was clicked mid-fetch
+
+    // outgoing FKs: this row -> one parent row each
+    const out = (sch.foreign_keys || []).filter((fk) => obj[fk.from] != null);
+    if (out.length) {
+      const sec = el("div", "rec-section");
+      sec.appendChild(el("div", "rec-sec-head", "References"));
+      for (const fk of out) {
+        let pr = null, cols = null;
+        try {
+          const r = await API.browse(state.db, fk.table,
+            { where: `${quoteIfNeeded(fk.to)} = ${recLit(obj[fk.from])}`, limit: 1 });
+          if (record.obj !== obj) return;
+          pr = r && r.rows && r.rows[0]; cols = r && r.columns;
+        } catch (_) {}
+        const grp = el("div", "rec-rel-group");
+        grp.appendChild(el("div", "rec-rel-head", `${esc(fk.from)} → ${esc(fk.table)}`));
+        if (pr) {
+          const row = relRow(fk.table, pr, cols);
+          grp.appendChild(row);
+          const slot = card._fieldByCol[fk.from];
+          if (slot) {
+            const go = el("span", "rec-fk-go", ICON("arrow-right"));
+            go.title = `Go to ${fk.table}`;
+            go.onclick = () => row.onclick();
+            slot.appendChild(go);
+          }
+        } else {
+          grp.appendChild(el("div", "rec-rel-empty", "— not found"));
+        }
+        sec.appendChild(grp);
+      }
+      card.appendChild(sec);
+    }
+
+    // incoming FKs: child rows -> this row
+    const inc = [];
+    (dia.tables || []).forEach((t) => (t.foreign_keys || []).forEach((fk) => {
+      if (fk.table === record.table) inc.push({ child: t.name, fk });
+    }));
+    if (inc.length) {
+      const sec = el("div", "rec-section");
+      sec.appendChild(el("div", "rec-sec-head", "Related"));
+      for (const { child, fk } of inc) {
+        const val = obj[fk.to];
+        if (val == null) continue;
+        const where = `${quoteIfNeeded(fk.from)} = ${recLit(val)}`;
+        let rows = [], cols = null, total = 0;
+        try {
+          const r = await API.browse(state.db, child, { where, limit: REL_LIMIT });
+          if (record.obj !== obj) return;
+          rows = (r && r.rows) || []; cols = r && r.columns; total = r ? r.total : rows.length;
+        } catch (_) {}
+        const grp = el("div", "rec-rel-group");
+        grp.appendChild(el("div", "rec-rel-head", `${esc(child)} · ${esc(fk.from)} (${total})`));
+        rows.forEach((cr) => grp.appendChild(relRow(child, cr, cols)));
+        if (!rows.length) grp.appendChild(el("div", "rec-rel-empty", "— none"));
+        if (total > rows.length) {
+          const more = el("div", "rec-more", `+ ${total - rows.length} more — open in Browse`);
+          more.onclick = () => openBrowse(child, where);
+          grp.appendChild(more);
+        }
+        sec.appendChild(grp);
+      }
+      card.appendChild(sec);
+    }
+  }
+
+  function relRow(table, rowObj, columns) {
+    const names = (columns ? columns.map((c) => c.name) : Object.keys(rowObj))
+      .filter((c) => c !== "__rowid__");
+    const parts = names.slice(0, 3).map((c) => {
+      const v = rowObj[c];
+      return v == null ? "∅" : (isBlob(v) ? "BLOB" : String(v));
+    });
+    const d = el("div", "rec-rel-row");
+    d.innerHTML = `<span class="rec-rel-label">${esc(parts.join("  ·  "))}</span>` + ICON("arrow-right");
+    d.title = "Open this record";
+    d.onclick = () => {
+      const o = {};
+      names.forEach((c) => (o[c] = rowObj[c]));
+      showRecord(o, null, table);
+    };
+    return d;
   }
 
   // ============================================================ DB TOOLS / ATTACH / IMPORT SQL

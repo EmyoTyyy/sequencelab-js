@@ -834,6 +834,35 @@ kbd {
 .json-null { color: var(--faint); font-style: italic; }
 table.grid tbody tr.row-selected { background: var(--accent-soft); }
 
+/* ---------------- Record panel (card + FK relations) ---------------- */
+.rec-modes { display: flex; gap: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 2px; }
+.rec-mode { font: 600 10.5px var(--sans); letter-spacing: .02em; color: var(--muted); background: none; border: 0; padding: 3px 9px; border-radius: 5px; cursor: pointer; }
+.rec-mode:hover { color: var(--text); }
+.rec-mode.active { color: var(--on-accent); background: var(--accent); }
+.rec-body { flex: 1; overflow: auto; }
+.rec-empty { color: var(--faint); font-family: var(--sans); font-size: 12px; padding: 14px; line-height: 1.5; }
+.rec-body .json-body { flex: none; }
+.rec-section { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.rec-section:last-child { border-bottom: 0; }
+.rec-sec-head { font: 700 10px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+.rec-field { display: grid; grid-template-columns: minmax(64px, 38%) 1fr auto; gap: 8px; align-items: baseline; padding: 3px 0; }
+.rec-k { font: 600 11px var(--mono); color: var(--muted); word-break: break-word; }
+.rec-v { font: 12px/1.5 var(--mono); color: var(--text); word-break: break-word; white-space: pre-wrap; }
+.rec-v.rec-null { color: var(--faint); font-style: italic; }
+.rec-fk-go { display: inline-flex; align-items: center; color: var(--accent); cursor: pointer; }
+.rec-fk-go:hover { color: var(--accent-strong); }
+.rec-fk-go svg { width: 13px; height: 13px; }
+.rec-rel-group { margin-bottom: 10px; }
+.rec-rel-group:last-child { margin-bottom: 0; }
+.rec-rel-head { font: 600 11px var(--mono); color: var(--muted); margin-bottom: 4px; }
+.rec-rel-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; margin: 2px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); cursor: pointer; }
+.rec-rel-row:hover { border-color: var(--accent); background: var(--accent-soft); }
+.rec-rel-label { font: 11.5px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-rel-row svg { width: 13px; height: 13px; color: var(--accent); flex: 0 0 auto; }
+.rec-rel-empty { font: italic 11px var(--sans); color: var(--faint); }
+.rec-more { font: 600 11px var(--sans); color: var(--accent); cursor: pointer; padding: 5px 2px 2px; }
+.rec-more:hover { color: var(--accent-strong); text-decoration: underline; }
+
 /* ---------------- WHERE filter bar (Browse) ---------------- */
 .where-bar {
   display: flex; align-items: center; gap: 9px; padding: 7px 16px;

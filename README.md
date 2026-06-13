@@ -39,6 +39,25 @@ Or just **double-click `index.html`** — on `file://` the app automatically
 falls back to the pure-JavaScript build of SQLite (`sql-asm.js`), no server
 needed at all.
 
+### Install & offline (PWA)
+
+Served over **HTTPS** (e.g. GitHub Pages), SequenceLab is an installable
+[Progressive Web App](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps):
+
+- Your browser offers **Install** — it then launches in its own standalone
+  window with its own icon, no address bar.
+- A **service worker** ([`sw.js`](sw.js)) caches the whole static shell
+  (HTML, CSS, every script, the fonts, and the SQLite WASM), so after the
+  first visit the app **loads instantly and runs with no network at all**.
+  Your databases were already offline — they live in IndexedDB — so this just
+  removes the last network dependency: the app's own files.
+- Updates land on reload; the cache version is bumped per release so stale
+  shells are cleared automatically.
+
+Service workers require a secure context, so this is inactive on `file://`
+(which keeps the `sql-asm.js` fallback) and on plain `http://` except
+`localhost`.
+
 ---
 
 ## Where data lives
@@ -113,13 +132,15 @@ a bottom **status bar** (db path · SQLite version · last run).
 - **Browse view**: spreadsheet grid, double-click inline editing, a raw **WHERE filter bar**, and a right-click cell menu (Set NULL · Copy/Paste · Add/Clone/Delete row · **"Go to" FK navigation** that jumps to the referenced row)
 - right-click a **column header**: sort asc/desc · prefill the WHERE bar with the column · copy column name · open the whole referenced table when the column is a FK
 - **saved filters** (Filters rail sub-button): save the current table + WHERE under a name and re-apply it in one click (stored per database, in the browser)
-- **result grids**: client-side sort & filter, **export as CSV / JSON / Markdown / INSERT statements**, quick **bar/line chart** for numeric columns, double-click **cell inspector** (full text, blob hex/image preview)
+- **result grids**: client-side sort & filter, **export as CSV / JSON / Markdown / INSERT statements**, quick **bar/line chart** for numeric columns, double-click **cell inspector** (full text, blob hex/image preview); results from a **simple single-table SELECT are editable in place** — double-click a cell to edit it, exactly like Browse
+- **record panel** (right side, toggle in the menu bar): click any row in Browse or a result grid to see it as a card next to its **foreign-key relations** — the parent rows it *references* and the child rows that *reference it* — each clickable to walk from record to record; a **JSON** toggle shows the raw row
 - result tabs (one per statement, re-runs refresh in place); when idle the results area shows a keyboard-shortcuts help panel
 - query history panel & saved snippets panel
 - **Syntax reference panel** — clickable boxes for every statement plus a grouped SQLite function reference; examples load straight into the editor
 - beginner-friendly **plain-English error explanations**
 - **6 themes**, grouped into dark (Nocturne · Graphite & Amber · Orchid · Gray) and light (Paper · Beige) families in both Settings and the View menu
 - rich **Settings** (slide toggles): tab width, word wrap, autocomplete behavior, editor font size, auto-format on run, **confirm destructive statements**, **read-only mode**, Browse page size, max rows per result, history recording/limit, NULL display, cell truncation, status bar, CSV delimiter/header defaults, and **auto-backup before destructive SQL** (the last 5 copies per db are kept in IndexedDB)
+- **installable PWA**: over HTTPS a service worker caches the whole static shell (scripts, fonts, SQLite WASM) so the app installs to its own window and **loads & runs fully offline**; the browser chrome color tracks the active theme
 
 **Diagram view** (rail icon)
 - ER diagram of the database: table cards with column names & types
@@ -155,7 +176,7 @@ a bottom **status bar** (db path · SQLite version · last run).
 | `Alt + W`                 | Close result tab               |
 | `Alt + S`                 | Toggle side panel              |
 | `Tab` (in editor)         | Indent / accept autocomplete   |
-| Double-click a cell | Edit it inline (in browse view)|
+| Double-click a cell | Edit it inline (Browse, or a single-table result grid)|
 
 ---
 

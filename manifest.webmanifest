@@ -1,0 +1,16 @@
+{
+  "name": "SequenceLab — local SQLite workbench",
+  "short_name": "SequenceLab",
+  "description": "A fully-offline SQLite workbench that runs entirely in your browser. Real SQLite via WebAssembly; databases persist locally.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": ".",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#131320",
+  "background_color": "#131320",
+  "icons": [
+    { "src": "static/img/logo-dark-128.png", "sizes": "128x128", "type": "image/png", "purpose": "any" },
+    { "src": "static/img/logo-dark.png", "sizes": "500x500", "type": "image/png", "purpose": "any" }
+  ]
+}

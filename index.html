@@ -6,6 +6,8 @@
   <title>SequenceLab — local SQLite workbench</title>
   <link rel="stylesheet" href="static/css/styles.css" />
   <link id="favicon" rel="icon" type="image/png" href="static/img/logo-128.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta id="themeColor" name="theme-color" content="#131320" />
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -248,13 +250,17 @@
       </div>
     </div>
 
-    <!-- ===================== JSON ROW VIEWER ===================== -->
+    <!-- ===================== RECORD / ROW VIEWER ===================== -->
     <aside class="json-panel" id="jsonPanel" hidden>
       <div class="side-toolbar">
-        <span class="side-hint">Row JSON</span>
+        <span class="side-hint" id="recTitle">Row</span>
+        <div class="rec-modes" id="recModes">
+          <button class="rec-mode active" data-recmode="card" title="Record card + related rows">Card</button>
+          <button class="rec-mode" data-recmode="json" title="Raw JSON">JSON</button>
+        </div>
         <button id="jsonClose" class="btn icon" data-icon="x" title="Close"></button>
       </div>
-      <pre id="jsonBody" class="json-body"><span class="json-empty">Click a row in a result grid or the Browse view to inspect it as JSON.</span></pre>
+      <div id="recBody" class="rec-body"><div class="rec-empty">Click a row in a result grid or the Browse view to inspect it and follow its foreign-key relations.</div></div>
     </aside>
 
   </div>
@@ -299,5 +305,12 @@
   <script src="static/js/diagram.js"></script>
   <script src="static/js/syntax.js"></script>
   <script src="static/js/app.js"></script>
+
+  <!-- PWA: cache the static shell for offline. Needs a secure context, so it
+       never runs on file:// (which uses the sql-asm.js fallback above). -->
+  <script>
+    if ("serviceWorker" in navigator && location.protocol !== "file:")
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+  </script>
 </body>
 </html>
