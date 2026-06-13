@@ -1,7 +1,7 @@
 // SequenceLab service worker — caches the static app shell so the hosted app
 // loads instantly and works fully offline. Data lives in IndexedDB (untouched
 // here). Bump CACHE on every release so old shells are cleared on activate.
-const CACHE = "sequencelab-v1";
+const CACHE = "sequencelab-v2";
 
 // The shell. sql-asm.js is intentionally omitted: it is only used on file://,
 // where service workers never run. The .wasm is the heavyweight that makes
@@ -28,6 +28,8 @@ const ASSETS = [
   "static/img/logo-128.png",
   "static/img/logo-dark-128.png",
   "static/img/logo-dark.png",
+  "static/img/icon-192.png",
+  "static/img/icon-512.png",
 ];
 
 self.addEventListener("install", (e) => {
