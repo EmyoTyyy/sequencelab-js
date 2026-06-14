@@ -21,6 +21,7 @@ window.ICON = (function () {
     refresh: '<path d="M12.8 8a4.8 4.8 0 1 1-1.5-3.5"/><path d="M13.4 3v3.1h-3.1"/>',
     trash: '<path d="M3.5 4.5h9"/><path d="M5.6 4.5V3.6a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v.9"/><path d="M4.6 4.5l.5 8a1 1 0 0 0 1 .95h3.8a1 1 0 0 0 1-.95l.5-8"/>',
     table: '<rect x="2.5" y="3" width="11" height="10" rx="1"/><line x1="2.5" y1="6.4" x2="13.5" y2="6.4"/><line x1="7" y1="6.4" x2="7" y2="13"/>',
+    chart: '<path d="M2.8 2.5v10.7h10.7"/><line x1="5.5" y1="13.2" x2="5.5" y2="8.5"/><line x1="8.5" y1="13.2" x2="8.5" y2="5.5"/><line x1="11.5" y1="13.2" x2="11.5" y2="9.5"/>',
     eye: '<path d="M1.6 8s2.5-4.4 6.4-4.4S14.4 8 14.4 8 11.9 12.4 8 12.4 1.6 8 1.6 8Z"/><circle cx="8" cy="8" r="1.7"/>',
     key: '<circle cx="5.6" cy="6" r="2.6"/><path d="M7.4 7.9 12.6 13.1"/><path d="M10.6 11.1 12 9.7"/>',
     link: '<path d="M5 11 11 5"/><path d="M6.6 5H11v4.4"/>',
@@ -31,6 +32,7 @@ window.ICON = (function () {
     "chevron-right": '<path d="M6 3.5 10.5 8 6 12.5"/>',
     pencil: '<path d="M10.5 3 13 5.5"/><path d="M3 13l.7-2.6 7-7L13 5.8l-7 7z"/>',
     "arrow-right": '<line x1="3" y1="8" x2="12.5" y2="8"/><path d="M9 4.5 12.5 8 9 11.5"/>',
+    "arrow-left": '<line x1="13" y1="8" x2="3.5" y2="8"/><path d="M7 4.5 3.5 8 7 11.5"/>',
     "arrow-up": '<line x1="8" y1="13" x2="8" y2="3.5"/><path d="M4.5 7 8 3.5 11.5 7"/>',
     "arrow-down": '<line x1="8" y1="3" x2="8" y2="12.5"/><path d="M4.5 9 8 12.5 11.5 9"/>',
     bookmark: '<path d="M4.5 2.6h7a.5.5 0 0 1 .5.5v10l-4-2.6-4 2.6V3.1a.5.5 0 0 1 .5-.5z"/>',
@@ -55,6 +57,8 @@ window.ICON = (function () {
     pin: '<path d="M8 11.3v3.4"/><path d="M6 7.2a1.3 1.3 0 0 1-.74 1.2l-1.2.6a1.3 1.3 0 0 0-.73 1.2v.45a.65.65 0 0 0 .65.65h8.04a.65.65 0 0 0 .65-.65v-.45a1.3 1.3 0 0 0-.73-1.2l-1.2-.6A1.3 1.3 0 0 1 10 7.2V4h.65a1.3 1.3 0 1 0 0-2.6h-5.3a1.3 1.3 0 1 0 0 2.6H6z"/>',
     "panel-left": '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6.2 3.7v8.6H4.2c-.8 0-1.5-.7-1.5-1.5V5.2c0-.8.7-1.5 1.5-1.5z" fill="currentColor" stroke="none"/>',
     "panel-right": '<rect x="2" y="3" width="12" height="10" rx="1.5"/><line x1="9.8" y1="3.2" x2="9.8" y2="12.8"/>',
+    info: '<circle cx="8" cy="8" r="6"/><line x1="8" y1="7.4" x2="8" y2="11.2"/><circle cx="8" cy="5" r=".55" fill="currentColor" stroke="none"/>',
+    keyboard: '<rect x="1.5" y="4" width="13" height="8" rx="1.2"/><line x1="4" y1="6.6" x2="4.01" y2="6.6"/><line x1="6.5" y1="6.6" x2="6.51" y2="6.6"/><line x1="9" y1="6.6" x2="9.01" y2="6.6"/><line x1="11.5" y1="6.6" x2="11.51" y2="6.6"/><line x1="5" y1="9.4" x2="11" y2="9.4"/>',
   };
 
   function ICON(name) {

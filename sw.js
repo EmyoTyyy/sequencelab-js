@@ -1,7 +1,7 @@
 // SequenceLab service worker — caches the static app shell so the hosted app
 // loads instantly and works fully offline. Data lives in IndexedDB (untouched
 // here). Bump CACHE on every release so old shells are cleared on activate.
-const CACHE = "sequencelab-v2";
+const CACHE = "sequencelab-v7";
 
 // The shell. sql-asm.js is intentionally omitted: it is only used on file://,
 // where service workers never run. The .wasm is the heavyweight that makes
@@ -12,6 +12,9 @@ const ASSETS = [
   "manifest.webmanifest",
   "static/css/styles.css",
   "static/js/icons.js",
+  "static/js/xlsx.js",
+  "static/js/i18n.dict.js",
+  "static/js/i18n.js",
   "static/js/api.js",
   "static/js/editor.js",
   "static/js/diagram.js",

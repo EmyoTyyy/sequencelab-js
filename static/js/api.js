@@ -278,10 +278,44 @@ const API = (() => {
     return "SQLite reported an error while running this statement. Read the raw message above for the specific cause.";
   }
 
-  const fail = (e) => ({
-    error: String((e && e.message) || e),
-    explanation: explainError((e && e.message) || e),
-  });
+  // Error codes — first digit is the category, so a future error console can
+  // group them: 1 = SQL/syntax, 2 = constraints, 3 = our validation, 4 = not
+  // found / naming, 5 = import/export/parse, 6 = mode/permission, 9 = unknown.
+  const ERR_RULES = [
+    [/foreign key constraint failed/, "E201", "FK"],
+    [/unique constraint failed/, "E202", "UNIQUE"],
+    [/not null constraint failed/, "E203", "NOTNULL"],
+    [/check constraint failed/, "E204", "CHECK"],
+    [/datatype mismatch/, "E205", "DATATYPE"],
+    [/doesn't fit column type/, "E301", "TYPE"],
+    [/duplicate primary key/, "E302", "DUPPK"],
+    [/primary key .*already exists/, "E303", "PKEXISTS"],
+    [/no such table/, "E401", "NOTABLE"],
+    [/no such column|has no column named/, "E402", "NOCOLUMN"],
+    [/ambiguous column name/, "E403", "AMBIGUOUS"],
+    [/already exists/, "E404", "EXISTS"],
+    [/syntax error/, "E101", "SYNTAX"],
+    [/incomplete input/, "E102", "INCOMPLETE"],
+    [/no such function/, "E103", "NOFUNC"],
+    [/invalid json/, "E501", "JSON"],
+    [/csv is empty|no rows|expected a json array/, "E502", "NODATA"],
+    [/columns match|json keys match/, "E503", "NOCOLMATCH"],
+    [/\.xlsx/, "E504", "XLSX"],
+    [/read-only/, "E601", "READONLY"],
+    [/interrupted/, "E901", "CANCELLED"],
+  ];
+  function errCode(msg) {
+    const m = String(msg).toLowerCase();
+    for (const [re, code, tag] of ERR_RULES) if (re.test(m)) return { code, tag };
+    if (/\bsql\b|statement|near "|unrecognized token/.test(m)) return { code: "E110", tag: "SQL" };
+    return { code: "E900", tag: "ERROR" };
+  }
+
+  const fail = (e) => {
+    const msg = String((e && e.message) || e);
+    const c = errCode(msg);
+    return { error: `${c.code} ${c.tag} · ${msg}`, explanation: explainError(msg), code: c.code, tag: c.tag };
+  };
 
   // generic wrapper: wait for the engine, run, map errors to the API shape
   const guard = (fn) => async (...args) => {
@@ -390,6 +424,68 @@ const API = (() => {
   }
 
   // ----------------------------------------------------------- CSV
+  // Pre-insert primary-key check for imports: rejects duplicate PK values
+  // within the batch, and (append mode) values that already exist — with a
+  // clear message — instead of SQLite's cryptic "UNIQUE constraint failed".
+  // No-op when the table has no PK or the import doesn't supply the PK column(s).
+  function verifyImportPk(db, table, mode, rows, providedCols, getVal) {
+    const info = execRows(db, `PRAGMA table_info(${quoteIdent(table)})`);
+    const pk = info.filter((c) => c.pk).sort((a, b) => a.pk - b.pk);
+    if (!pk.length || !pk.every((c) => providedCols.includes(c.name))) return;
+    const pkCols = pk.map((c) => c.name);
+    const num = pk.map((c) => /INT|REAL|FLOA|DOUB|NUM|DEC/i.test(c.type || ""));
+    const norm = (v, i) => {
+      if (v === null || v === undefined || v === "") return "∅";
+      if (num[i] && typeof v !== "number") {
+        const s = String(v).trim();
+        if (/^-?\d+(\.\d+)?$/.test(s)) return "#" + Number(s);
+      }
+      return typeof v === "number" ? "#" + v : "$" + String(v);
+    };
+    const keyOf = (row) => pkCols.map((c, i) => norm(getVal(row, c), i)).join("");
+    const label = (row) => pkCols.map((c) => `${c}=${getVal(row, c)}`).join(", ");
+    const seen = new Map();
+    for (let i = 0; i < rows.length; i++) {
+      const k = keyOf(rows[i]);
+      if (k.includes("∅")) continue; // NULL/blank PK: let SQLite / autoincrement decide
+      if (seen.has(k))
+        throw new Error(`Duplicate primary key (${label(rows[i])}) in the import — rows ${seen.get(k) + 1} and ${i + 1}. Nothing was imported.`);
+      seen.set(k, i);
+    }
+    if (mode !== "replace") {
+      const existing = new Set(
+        execRows(db, `SELECT ${pkCols.map(quoteIdent).join(", ")} FROM ${quoteIdent(table)}`)
+          .map((r) => pkCols.map((c, i) => norm(r[c], i)).join("")));
+      for (let i = 0; i < rows.length; i++) {
+        const k = keyOf(rows[i]);
+        if (k.includes("∅")) continue;
+        if (existing.has(k))
+          throw new Error(`Primary key (${label(rows[i])}) already exists in "${table}" (row ${i + 1}). Nothing was imported.`);
+      }
+    }
+  }
+
+  // SQLite column affinity from a declared type (the standard rules).
+  function sqlAffinity(t) {
+    t = String(t || "").toUpperCase();
+    if (t.includes("INT")) return "INTEGER";
+    if (/CHAR|CLOB|TEXT/.test(t)) return "TEXT";
+    if (t === "" || t.includes("BLOB")) return "BLOB";
+    if (/REAL|FLOA|DOUB/.test(t)) return "REAL";
+    return "NUMERIC";
+  }
+  // Returns an error string when a value can't fit a numeric column, else null.
+  // (SQLite would silently keep it as text via affinity; we reject instead.)
+  function typeMismatch(type, v) {
+    if (v === null || v === undefined || v === "" || (v && typeof v === "object")) return null;
+    const aff = sqlAffinity(type), s = String(v).trim();
+    if (aff === "INTEGER" && !(typeof v === "number" ? Number.isInteger(v) : /^[+-]?\d+$/.test(s)))
+      return `“${v}” doesn't fit column type ${type || "INTEGER"} (a whole number is expected).`;
+    if (aff === "REAL" && !(typeof v === "number" || /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)))
+      return `“${v}” doesn't fit column type ${type || "REAL"} (a number is expected).`;
+    return null;
+  }
+
   function parseCsv(text, delim) {
     const rows = [];
     let row = [], cur = "", inQ = false, i = 0;
@@ -849,7 +945,8 @@ const API = (() => {
           .map((c) => c.name);
         const use = cols.filter((c) => live.includes(c));
         if (!use.length) throw new Error("No JSON keys match the table's columns.");
-        const ins = h.db.prepare(`INSERT INTO ${quoteIdent(table)} (` +
+        if (p.mode !== "upsert") verifyImportPk(h.db, table, p.mode, data, use, (row, col) => row[col]);
+        const ins = h.db.prepare(`INSERT ${p.mode === "upsert" ? "OR REPLACE " : ""}INTO ${quoteIdent(table)} (` +
           use.map(quoteIdent).join(", ") + ") VALUES (" +
           use.map(() => "?").join(", ") + ")");
         data.forEach((r) => {
@@ -1007,11 +1104,79 @@ const API = (() => {
         await recordHistory(name, sql, error ? "error" : "ok", totalMs, totalRows);
       }
       const payload = { results, duration_ms: totalMs };
-      if (error) { payload.error = error; payload.explanation = explainError(error); }
+      if (error) {
+        const c = errCode(error);
+        payload.error = `${c.code} ${c.tag} · ${error}`;
+        payload.explanation = explainError(error);
+        payload.code = c.code; payload.tag = c.tag;
+      }
       return payload;
     }),
     cancelQuery: async () => ({
       ok: false, note: "Queries run synchronously in the browser edition.",
+    }),
+
+    // dry-run a write query in a savepoint, build each affected table's resulting
+    // rows tagged add / del / edit, then roll back (nothing is committed/persisted).
+    previewWrite: guard(async (name, sql) => {
+      const h = await getDb(name);
+      const CAP = 2000;
+      const listTables = () => execRows(h.db,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .map((r) => r.name);
+      const snap = (t) => {
+        let info;
+        try { info = execRows(h.db, `PRAGMA table_info(${quoteIdent(t)})`); } catch (_) { return null; }
+        if (!info.length) return null;
+        const cols = info.map((c) => c.name);
+        let rows;
+        try { rows = execRows(h.db, `SELECT rowid AS __rid, * FROM ${quoteIdent(t)}`); }
+        catch (_) { return { cols, map: null }; } // WITHOUT ROWID / view → can't diff
+        const m = new Map();
+        rows.forEach((r) => { const o = {}; for (const k in r) o[k] = jsonable(r[k]); m.set(r.__rid, o); });
+        return { cols, map: m };
+      };
+      const beforeTables = listTables();
+      const before = {};
+      beforeTables.forEach((t) => { before[t] = snap(t); });
+      h.db.run("SAVEPOINT sl_preview");
+      try { h.db.exec(sql); }
+      catch (e) {
+        try { h.db.run("ROLLBACK TO sl_preview"); h.db.run("RELEASE sl_preview"); } catch (_) {}
+        return fail(e);
+      }
+      const afterTables = listTables();
+      const after = {};
+      afterTables.forEach((t) => { after[t] = snap(t); });
+      h.db.run("ROLLBACK TO sl_preview");
+      h.db.run("RELEASE sl_preview");
+
+      const eq = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+      const tables = [];
+      [...new Set([...beforeTables, ...afterTables])].sort().forEach((t) => {
+        const b = before[t], a = after[t];
+        const cols = (a && a.cols) || (b && b.cols);
+        if (!cols) return;
+        const cellsOf = (row) => cols.map((c) => (row[c] === undefined ? null : row[c]));
+        const bm = b && b.map, am = a && a.map;
+        const rows = []; let adds = 0, dels = 0, edits = 0;
+        if (bm && am) {
+          bm.forEach((row, rid) => {
+            if (!am.has(rid)) { rows.push({ cells: cellsOf(row), status: "del" }); dels++; return; }
+            const ar = am.get(rid);
+            if (cols.some((c) => !eq(row[c], ar[c]))) { rows.push({ cells: cellsOf(ar), status: "edit" }); edits++; }
+            else rows.push({ cells: cellsOf(row), status: "" });
+          });
+          am.forEach((row, rid) => { if (!bm.has(rid)) { rows.push({ cells: cellsOf(row), status: "add" }); adds++; } });
+        } else if (am && !bm) {
+          am.forEach((row) => { rows.push({ cells: cellsOf(row), status: "add" }); adds++; });
+        } else if (bm && !am) {
+          bm.forEach((row) => { rows.push({ cells: cellsOf(row), status: "del" }); dels++; });
+        }
+        if (adds || dels || edits)
+          tables.push({ table: t, columns: cols, rows: rows.slice(0, CAP), adds, dels, edits, truncated: rows.length > CAP });
+      });
+      return { tables };
     }),
 
     // -------------------------------------------------- rows (browse)
@@ -1055,9 +1220,12 @@ const API = (() => {
     }),
     updateRow: guard(async (name, table, identifier, changes) => {
       const h = await getDb(name);
-      const cols = new Set(tableColumns(h.db, table).map((c) => c.name));
-      for (const c in changes)
-        if (!cols.has(c)) return { error: `Unknown column '${c}'.` };
+      const byName = {}; tableColumns(h.db, table).forEach((c) => (byName[c.name] = c));
+      for (const c in changes) {
+        if (!byName[c]) return { error: `Unknown column '${c}'.` };
+        const bad = typeMismatch(byName[c].type, changes[c]);
+        if (bad) return { error: bad };
+      }
       if (!Object.keys(changes || {}).length) return { error: "No changes provided." };
       const [whereSql, whereParams] = rowIdentifier(identifier);
       h.db.run(`UPDATE ${quoteIdent(table)} SET ` +
@@ -1121,7 +1289,14 @@ const API = (() => {
           .map((c) => c.name);
         const use = headers.map((c, i) => ({ c, i })).filter((x) => live.includes(x.c));
         if (!use.length) throw new Error("No CSV columns match the table's columns.");
-        const ins = h.db.prepare(`INSERT INTO ${quoteIdent(table)} (` +
+        if (p.mode !== "upsert") {
+          const pkRows = dataRows.filter((r) => !r.every((v) => v === ""));
+          verifyImportPk(h.db, table, p.mode, pkRows, use.map((x) => x.c), (row, col) => {
+            const u = use.find((x) => x.c === col);
+            return u ? (row[u.i] === "" || row[u.i] === undefined ? null : row[u.i]) : null;
+          });
+        }
+        const ins = h.db.prepare(`INSERT ${p.mode === "upsert" ? "OR REPLACE " : ""}INTO ${quoteIdent(table)} (` +
           use.map((x) => quoteIdent(x.c)).join(", ") + ") VALUES (" +
           use.map(() => "?").join(", ") + ")");
         dataRows.forEach((r) => {
@@ -1181,5 +1356,21 @@ const API = (() => {
       db.close();
       return { ok: true, sqlite: v };
     }),
+
+    // -------------------------------------------------- debug / reset
+    // close the cached connection + drop in-memory handles, then delete the
+    // whole IndexedDB (every database + backups + kv). Caller reloads after.
+    wipeStorage: async () => {
+      try { if (_idb) { const d = await _idb; d.close(); } } catch (_) {}
+      _idb = null;
+      open.clear();
+      await new Promise((resolve) => {
+        try {
+          const req = indexedDB.deleteDatabase("sequencelab");
+          req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        } catch (_) { resolve(); }
+      });
+      return { ok: true };
+    },
   };
 })();

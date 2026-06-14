@@ -103,19 +103,22 @@ files on disk:
 - run arbitrary SQL (multi-statement aware) and return result sets
 - browse tables with pagination & sorting
 - inline row editing · insert · delete (parameterized, identifier-validated)
-- import CSV (append / replace, optional table creation) · import a whole `.sql` script
-- export CSV (whole table or a query) · **export the database as a SQL dump**
+- **typed-write validation**: a value that doesn't fit a column's affinity (text in an INTEGER/REAL column) is rejected instead of silently coerced
+- **coded errors**: every engine error carries a category code — `E1xx` SQL/syntax, `E2xx` constraints (`E201 FK`, `E202 UNIQUE`, `E203 NOTNULL`…), `E3xx` validation, `E4xx` naming, `E5xx` import/IO — ready for a future error console
+- import **CSV / JSON / Excel (.xlsx)** — append, or **replace-on-matching-PK** (upsert); optional table creation with inferred types; **duplicate primary keys are verified and rejected** with a clear message · import a whole `.sql` script
+- export **CSV / JSON / Excel (.xlsx)** (whole table or a query result) · **export the database as a SQL dump**
 - **attach other stored databases** for cross-db queries (`alias.table`)
 - **index management** (list/create/drop) · **change a column's type / add a foreign key** via safe table rebuild (rows, keys & indexes preserved)
 - **trigger management** (list/create/drop) · **PRAGMA settings** (foreign-key enforcement kept as a per-db preference, journal mode, auto-vacuum, user_version)
-- **global search** across every column of every table · **JSON import** (array of objects; optional table creation with inferred types)
+- **global search** across every column of every table
+- `.xlsx` read/write is **hand-rolled, dependency-free** (native zip via `CompressionStream`/`DecompressionStream`) — no vendored spreadsheet library
 - **backups API**: list / restore / delete the auto-backups
 - query history + saved snippets, persisted in SQLite (consecutive duplicates collapse)
 
 **Frontend** — desktop-app layout: thin **menu bar** (File / Edit / View / Help),
 far-left **icon rail** for the main sections, 240px sidebar, main workspace, and
 a bottom **status bar** (db path · SQLite version · last run).
-- **multiple query tabs** (persisted per browser) with a ＋ button
+- **multiple query tabs** (persisted per browser) with a ＋ button; **drag tabs to reorder** them (result tabs too)
 - SQL editor with **line numbers**, **syntax highlighting**, comment toggle (`Ctrl+/`), auto-paired quotes/brackets, duplicate-line (`Alt+Shift+↓`)
 - **Run split-button**: Run all · Run selected · Run current statement — the Run button becomes **Stop** while a query runs
 - `:name` / `?` **query parameters** prompt for values before running
@@ -128,18 +131,23 @@ a bottom **status bar** (db path · SQLite version · last run).
 - **auto-capitalization** of SQL keywords (toggle in Settings; persisted per browser)
 - sidebar with **PINNED** + **ENTITIES** collapsible sections (pin via hover icon or right-click), live filter, db selector + refresh
 - **file explorer** panel (rail sub-button): everything in `data/` with size & date — click a `.db` to switch to it; externally registered databases are listed too
-- right-click an entity: Browse table · View schema · Copy table name · Pin · Export CSV
+- right-click an entity: Browse table · View schema · Copy table name · Pin · **Export ▸ CSV / JSON / Excel**
 - **Browse view**: spreadsheet grid, double-click inline editing, a raw **WHERE filter bar**, and a right-click cell menu (Set NULL · Copy/Paste · Add/Clone/Delete row · **"Go to" FK navigation** that jumps to the referenced row)
-- right-click a **column header**: sort asc/desc · prefill the WHERE bar with the column · copy column name · open the whole referenced table when the column is a FK
-- **saved filters** (Filters rail sub-button): save the current table + WHERE under a name and re-apply it in one click (stored per database, in the browser)
-- **result grids**: client-side sort & filter, **export as CSV / JSON / Markdown / INSERT statements**, quick **bar/line chart** for numeric columns, double-click **cell inspector** (full text, blob hex/image preview); results from a **simple single-table SELECT are editable in place** — double-click a cell to edit it, exactly like Browse
-- **record panel** (right side, toggle in the menu bar): click any row in Browse or a result grid to see it as a card next to its **foreign-key relations** — the parent rows it *references* and the child rows that *reference it* — each clickable to walk from record to record; a **JSON** toggle shows the raw row
+- **spreadsheet-style selection** (Browse + result grids): click a cell to select it (blue outline), **drag** or **shift-click** for a rectangle, **click the # cell** for a whole row · **Ctrl/Cmd+C** copies as TSV/CSV (separator set in Settings or via the range right-click) · **Delete** removes the selected rows, **Backspace** sets the selected cells to NULL · right-click a range to **Copy as** (Tab/Comma/Semicolon/Pipe) or **Create table from selection**
+- **typed cell editors**: editing picks the right input per column — number, **date / datetime / time picker**, boolean **checkbox**, or text
+- right-click a **column header**: sort asc/desc · per-column filter · **Column stats** (rows, non-null, nulls, distinct, min/max, sum/avg, top values) · copy column name · open the referenced table when the column is a FK
+- **saved filters** (Filters rail sub-button): a dialog to name the filter + edit the WHERE (prefilled with the current one; Save stays disabled until both are filled), re-applied in one click (stored per database, in the browser)
+- **result grids**: client-side sort & per-column filter, **export as CSV / JSON / Excel / Markdown / INSERT statements**, **charts** (bar · line · area · scatter · pie · histogram) with **PNG export / copy**, double-click **cell inspector** (full text, blob hex/image preview), **Save as table** (`CREATE TABLE … AS`); results from a **simple single-table SELECT are editable in place** — double-click a cell, exactly like Browse
+- **record panel** (right side, toggle in the menu bar): with it open, selecting a row shows it as a card next to its **foreign-key relations** — the parent rows it *references* and the child rows that *reference it* — each clickable to walk from record to record; a **JSON** toggle shows the raw row
+- **preview-before-write** (opt-in in Settings): when on, a **Preview tab auto-opens as you type a write query** and live-shows the affected table with its rows flickering — **green = added · red = deleted · white = edited** (a transactional dry-run that's rolled back, so nothing is touched). The **Run** button then applies it for real
+- in-app confirmation dialogs (no browser `confirm()` popups)
 - result tabs (one per statement, re-runs refresh in place); when idle the results area shows a keyboard-shortcuts help panel
 - query history panel & saved snippets panel
 - **Syntax reference panel** — clickable boxes for every statement plus a grouped SQLite function reference; examples load straight into the editor
 - beginner-friendly **plain-English error explanations**
-- **6 themes**, grouped into dark (Nocturne · Graphite & Amber · Orchid · Gray) and light (Paper · Beige) families in both Settings and the View menu
-- rich **Settings** (slide toggles): tab width, word wrap, autocomplete behavior, editor font size, auto-format on run, **confirm destructive statements**, **read-only mode**, Browse page size, max rows per result, history recording/limit, NULL display, cell truncation, status bar, CSV delimiter/header defaults, and **auto-backup before destructive SQL** (the last 5 copies per db are kept in IndexedDB)
+- **6 themes** + a **System** option that follows your OS (dark → Nocturne, light → Paper) and flips live when the OS does; grouped into dark (Nocturne · Graphite & Amber · Orchid · Gray) and light (Paper · Beige) families in both Settings and the View menu. New installs default to **System**
+- **bilingual UI (English / Français)** — pick the language in Settings; the whole interface switches **live, no reload** (menus, panels, dialogs, toasts, settings, the syntax reference and error explanations). English is the default; the choice is remembered per browser. SQL keywords, example queries and your data are never translated. Built on a tiny dictionary-driven layer (`static/js/i18n.js` + `i18n.dict.js`) that translates the rendered chrome while explicitly excluding data zones (result/browse grids, the editor, the schema tree, record values)
+- rich **Settings** (slide toggles): **language**, tab width, word wrap, autocomplete behavior, editor font size, auto-format on run, **confirm destructive statements**, **read-only mode**, **preview writes before applying**, Browse page size, max rows per result, history recording/limit, NULL display, cell truncation, status bar, CSV delimiter/header defaults, **range-copy separator**, and **auto-backup before destructive SQL** (the last 5 copies per db are kept in IndexedDB)
 - **installable PWA**: over HTTPS a service worker caches the whole static shell (scripts, fonts, SQLite WASM) so the app installs to its own window and **loads & runs fully offline**; the browser chrome color tracks the active theme
 
 **Diagram view** (rail icon)
@@ -150,7 +158,7 @@ a bottom **status bar** (db path · SQLite version · last run).
 - auto-layout groups **connected tables next to each other** (FK-adjacency ordering, serpentine grid) & fit-to-screen; layout persists per database in the browser
 - **saved layouts** (Layouts rail sub-button): keep several named arrangements and switch between them
 - **legend & notes** (Notes rail sub-button): draggable **sticky notes** on the canvas (new ones cascade like OS windows), color **tags** on table cards (picked in the table editor), a legend naming what each color means, and bulk note deletion (all, or per color)
-- **export the diagram as PNG or SVG** — sticky notes and tag stripes are drawn into the export too
+- **export the diagram as PNG or SVG** — sticky notes and tag stripes are drawn in too, with the table cards' **rounded corners** preserved
 - left panel **schema editor**: add / rename / drop columns, **change column types**, **manage indexes**, **manage triggers** (view SQL / create / drop), rename / drop / create tables
 
 **Accessibility**
@@ -176,7 +184,11 @@ a bottom **status bar** (db path · SQLite version · last run).
 | `Alt + W`                 | Close result tab               |
 | `Alt + S`                 | Toggle side panel              |
 | `Tab` (in editor)         | Indent / accept autocomplete   |
-| Double-click a cell | Edit it inline (Browse, or a single-table result grid)|
+| Double-click a cell       | Edit it inline (Browse, or a single-table result grid) |
+| Click a cell / drag / shift-click | Select a cell / range (click the **#** for a whole row) |
+| `Ctrl/Cmd + C` (in a grid)| Copy the selected cells        |
+| `Delete` (in Browse)      | Delete the selected rows       |
+| `Backspace` (in a grid)   | Set the selected cells to NULL |
 
 ---
 
@@ -187,5 +199,8 @@ a bottom **status bar** (db path · SQLite version · last run).
 - Row edit/insert/delete use **parameterized queries** and validate table and
   column names against the live schema, so the visual editor can't be tricked
   into running arbitrary SQL.
-- Importing a file validates the SQLite header before storing it.
+- **Read-only mode** blocks every write at the source; **preview-before-write**
+  (opt-in) live-shows a write query's row changes (a rolled-back dry-run) before you Run it.
+- Importing a file validates the SQLite header before storing it; imports also
+  **verify primary-key uniqueness** before inserting.
 - sql.js is vendored in `static/vendor/` (MIT, license included) — nothing is fetched from the network at runtime.

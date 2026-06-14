@@ -24,7 +24,7 @@
     activeTab: null,
     schema: {},
     autoCaps: localStorage.getItem("sl.autoCaps") !== "false",
-    theme: localStorage.getItem("sl.theme") || "nocturne",
+    theme: localStorage.getItem("sl.theme") || "system",
     view: "editor",
     sidePanel: "schema",
     browsePanel: "tables",    // browse-side: "tables" | "filters"
@@ -34,10 +34,11 @@
   // ----------------------------------------------------------------- settings
   const SETTINGS_DEFAULTS = {
     tabWidth: 2, wordWrap: false, acEnabled: true, acMinChars: 1, autoFormat: false,
-    pageSize: 100, maxRows: 500, confirmDestructive: true, readOnly: false,
+    pageSize: 100, maxRows: 500, confirmDestructive: true, readOnly: false, previewWrites: false,
     recordHistory: true, maxHistory: 200,
     nullDisplay: "NULL", truncate: 0, showStatusbar: true, density: "comfortable",
     csvDelimiter: ",", csvHeader: true, autoBackup: false,
+    rangeSep: "tab",
   };
   let S = { ...SETTINGS_DEFAULTS };
   try { S = { ...SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem("sl.settings") || "{}") }; } catch (_) {}
@@ -76,10 +77,15 @@
     { id: "beige", name: "Beige", sub: "warm light", dot: "#a06b1f" },
   ];
   const LIGHT_THEMES = ["light", "beige"];
-  function applyTheme(id) {
-    state.theme = id;
+  // "system" follows the OS: dark → Nocturne, light → Paper.
+  function resolveTheme(pref) {
+    return pref === "system" ? (darkTab.matches ? "nocturne" : "paper") : pref;
+  }
+  function applyTheme(pref) {
+    state.theme = pref;                  // remembered preference (may be "system")
+    localStorage.setItem("sl.theme", pref);
+    const id = resolveTheme(pref);       // concrete theme actually applied
     document.documentElement.setAttribute("data-theme", id);
-    localStorage.setItem("sl.theme", id);
     // navy-stroke logo on light themes, light-stroke variant on dark ones
     const logo = $(".menu-logo");
     if (logo) logo.src = LIGHT_THEMES.includes(id) ? "static/img/logo-128.png" : "static/img/logo-dark-128.png";
@@ -96,7 +102,10 @@
       ? "static/img/logo-dark-128.png"
       : "static/img/logo-128.png";
   }
-  darkTab.addEventListener("change", applyFavicon);
+  darkTab.addEventListener("change", () => {
+    applyFavicon();
+    if (state.theme === "system") applyTheme("system"); // re-resolve on OS flip
+  });
   applyFavicon();
 
   let editor;
@@ -105,7 +114,7 @@
   let toastTimer;
   function toast(msg, kind = "") {
     const t = $("#toast");
-    t.textContent = msg;
+    t.textContent = window.I18N ? I18N.t(msg) : msg;
     t.className = "toast " + kind;
     t.hidden = false;
     clearTimeout(toastTimer);
@@ -114,7 +123,9 @@
 
   // ----------------------------------------------------------------- modal
   let modalReturnFocus = null;
+  let modalOnClose = null;
   function openModal(title, bodyNode, footNodes) {
+    modalOnClose = null;
     modalReturnFocus = document.activeElement;
     $("#modalTitle").textContent = title;
     const body = $("#modalBody");
@@ -132,9 +143,26 @@
     $("#modalBackdrop").hidden = true;
     if (modalReturnFocus && modalReturnFocus.focus) modalReturnFocus.focus();
     modalReturnFocus = null;
+    const cb = modalOnClose; modalOnClose = null;
+    if (cb) cb();
   }
-  // keep Tab cycling inside the open modal
+  // in-app replacement for window.confirm — resolves false on any dismissal
+  function askConfirm(message, opts = {}) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+      const body = el("div");
+      body.innerHTML = `<p class="confirm-msg">${esc(message).replace(/\n/g, "<br>")}</p>`;
+      const yes = mkBtn(opts.confirmLabel || "Confirm", opts.tone === "primary" ? "primary" : "danger",
+        () => { finish(true); closeModal(); });
+      openModal(opts.title || "Confirm", body,
+        [mkBtn(opts.cancelLabel || "Cancel", "ghost", () => { finish(false); closeModal(); }), yes]);
+      modalOnClose = () => finish(false);
+    });
+  }
+  // keep Tab cycling inside the open modal; Esc dismisses it
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#modalBackdrop").hidden) { e.preventDefault(); closeModal(); return; }
     if (e.key !== "Tab" || $("#modalBackdrop").hidden) return;
     const focusables = $$("#modal input, #modal select, #modal textarea, #modal button")
       .filter((n) => !n.disabled && n.offsetParent !== null);
@@ -412,20 +440,15 @@
   function openDbDialog() {
     const fsOk = API.supportsFileLink();
     const body = el("div");
+    const hintLink = fsOk
+      ? `<b>${esc(I18N.t("Open with live link"))}</b> ` +
+        esc(I18N.t("instead keeps a connection to the real file: every change is saved straight back into it (you'll be asked for permission once)."))
+      : esc(I18N.t("Live file links (saving straight back into the real file) need Chrome or Edge."));
     body.appendChild(
       el("div", "field",
-        `<label>Pick a .db file to import (copy)</label>
+        `<label>${esc(I18N.t("Pick a .db file to import (copy)"))}</label>
          <input type="file" id="openDbFile" accept=".db,.sqlite,.sqlite3,.db3" />
-         <div class="hint">Import copies the file into the browser's storage —
-         the original on disk is never touched; get the edited copy back with
-         File → Save database.` +
-        (fsOk
-          ? `<br><br><b>Open with live link</b> instead keeps a connection to the
-             real file: every change is saved straight back into it (you'll be
-             asked for permission once).`
-          : `<br><br>Live file links (saving straight back into the real file)
-             need Chrome or Edge.`) +
-        `</div>`)
+         <div class="hint">${esc(I18N.t("Import copies the file into the browser's storage — the original on disk is never touched; get the edited copy back with File → Save database."))}<br><br>${hintLink}</div>`)
     );
     const imp = mkBtn("Import copy", fsOk ? "ghost" : "primary", async () => {
       const f = $("#openDbFile").files[0];
@@ -468,7 +491,7 @@
         `The real file on disk keeps everything already saved to it.`
       : `Close "${name}"?\n\nThis permanently deletes the browser copy — ` +
         `download it first (File → Save database) if you need to keep it.`;
-    if (!opts.silent && !confirm(msg)) return;
+    if (!opts.silent && !(await askConfirm(msg, { title: "Close database", confirmLabel: "Close" }))) return;
     await API.closeDatabase(name);
     const r = await API.listDatabases();
     if (!(r.databases || []).length) await API.resetExample(); // never strand the app
@@ -492,7 +515,7 @@
 
   // reset example
   async function resetExampleAction() {
-    if (!confirm("Reset the example database to its original seeded state?")) return;
+    if (!(await askConfirm("Reset the example database to its original seeded state?", { title: "Reset example", confirmLabel: "Reset" }))) return;
     const r = await API.resetExample();
     if (r.error) return toast(r.error, "err");
     toast("Example database reset", "ok");
@@ -560,7 +583,7 @@
 
     if (!pins.length)
       pinnedList.appendChild(el("div", "msg-block",
-        `<span style="color:var(--text-faint);font-size:11px">Nothing pinned. Hover a table and click the pin.</span>`));
+        `<span style="color:var(--text-faint);font-size:11px">${esc(I18N.t("Nothing pinned. Hover a table and click the pin."))}</span>`));
     pins.forEach((name) => {
       const t = tables.find((x) => x.name === name);
       if (t) pinnedList.appendChild(buildEntityRow(t, true));
@@ -630,9 +653,7 @@
         } },
       { icon: "pin", label: pinned ? "Unpin table" : "Pin table", onClick: () => togglePin(t.name) },
       { sep: true },
-      { icon: "download", label: "Export CSV", onClick: () => {
-          triggerDownload(API.exportUrl(state.db, { table: t.name, ...csvUrlOpts() }), t.name + ".csv");
-        } },
+      { icon: "download", label: "Export", sub: () => exportItems(t.name) },
     ]);
   }
 
@@ -652,7 +673,7 @@
     body.innerHTML =
       `<div class="field"><label>Columns</label>${rows}</div>` +
       (r.ddl ? `<div class="field"><label>DDL</label><pre class="syntax-code">${esc(r.ddl)}</pre></div>` : "");
-    openModal(`Schema — ${table}`, body, [mkBtn("Close", "primary", closeModal)]);
+    openModal(I18N.t("Schema — {0}", table), body, [mkBtn("Close", "primary", closeModal)]);
   }
 
   async function loadColumns(table, container) {
@@ -790,7 +811,7 @@
     ta.value = ta.value.replace(re, repl.replace(/\$/g, "$$$$"));
     editor.render();
     findMatches();
-    toast(`Replaced ${n} occurrence${n > 1 ? "s" : ""}`, "ok");
+    toast(I18N.t("Replaced {0} occurrences", n), "ok");
   }
   function openFindBar() {
     if (state.view !== "editor") railSelect("editor");
@@ -826,6 +847,7 @@
     if (runningQid) { API.cancelQuery(runningQid); return; } // acts as Stop while running
     runQuery(false);
   };
+  $("#sqlInput").addEventListener("input", schedulePreview); // live write-preview as you type
   $("#btnRunMenu").onclick = (e) => {
     e.stopPropagation();
     toggleCtxMenu(e.currentTarget, [
@@ -945,24 +967,90 @@
   function activeQueryTab() {
     return qtabs.list.find((t) => t.id === qtabs.active) || qtabs.list[0];
   }
+  let wiping = false; // set during a debug reset so beforeunload doesn't re-save
   function persistQueryTabs() {
+    if (wiping) return;
     const cur = activeQueryTab();
     if (cur && editor) cur.sql = editor.getValue();
     localStorage.setItem("sl.qtabs", JSON.stringify(qtabs));
   }
   window.addEventListener("beforeunload", persistQueryTabs);
 
+  // pointer-based tab reordering: the dragged tab follows the cursor on the X
+  // axis only (fixed Y) while the other tabs slide in real time to make room.
+  function makeTabDraggable(tab, id, list, onReorder) {
+    tab.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest(".tab-close")) return;
+      const bar = tab.parentElement;
+      const sibs = [...bar.children].filter((x) =>
+        x.classList.contains("query-tab") || x.classList.contains("result-tab"));
+      const rects = sibs.map((t) => t.getBoundingClientRect());
+      const fromIdx = sibs.indexOf(tab);
+      const tabW = rects[fromIdx].width;
+      const startX = e.clientX;
+      let curIdx = fromIdx, dragging = false;
+
+      const move = (ev) => {
+        const dx = ev.clientX - startX;
+        if (!dragging) {
+          if (Math.abs(dx) < 4) return;
+          dragging = true;
+          tab.classList.add("tab-dragging");
+          bar.classList.add("tabs-sorting");
+          tab.style.transition = "none";
+          sibs.forEach((t) => { if (t !== tab) t.style.transition = "transform .16s ease"; });
+        }
+        tab.style.transform = `translateX(${dx}px)`;
+        const center = rects[fromIdx].left + tabW / 2 + dx;
+        let ni = fromIdx;
+        for (let i = 0; i < sibs.length; i++) {
+          if (i === fromIdx) continue;
+          const c = rects[i].left + rects[i].width / 2;
+          if (i > fromIdx && center > c) ni = Math.max(ni, i);
+          else if (i < fromIdx && center < c) ni = Math.min(ni, i);
+        }
+        if (ni !== curIdx) {
+          curIdx = ni;
+          sibs.forEach((t, i) => {
+            if (t === tab) return;
+            const s = (fromIdx < curIdx && i > fromIdx && i <= curIdx) ? -tabW
+              : (fromIdx > curIdx && i < fromIdx && i >= curIdx) ? tabW : 0;
+            t.style.transform = s ? `translateX(${s}px)` : "";
+          });
+        }
+      };
+      const up = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        if (!dragging) return;
+        sibs.forEach((t) => { t.style.transform = ""; t.style.transition = ""; t.classList.remove("tab-dragging"); });
+        bar.classList.remove("tabs-sorting");
+        if (curIdx !== fromIdx) {
+          const [item] = list.splice(fromIdx, 1);
+          list.splice(curIdx, 0, item);
+          onReorder();
+        }
+        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        document.addEventListener("click", swallow, true);
+        setTimeout(() => document.removeEventListener("click", swallow, true), 0);
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+    });
+  }
+
   function renderQueryTabs() {
     const bar = $("#queryTabs");
     bar.innerHTML = "";
     qtabs.list.forEach((t) => {
       const tab = el("div", "query-tab" + (t.id === qtabs.active ? " active" : ""));
-      tab.innerHTML = `<span>${esc(t.title)}</span>` +
+      tab.innerHTML = `<span>${esc(localizeTitle(t.title))}</span>` +
         (qtabs.list.length > 1 ? `<span class="tab-close">${ICON("x")}</span>` : "");
       tab.onclick = (e) => {
         if (e.target.closest(".tab-close")) closeQueryTab(t.id);
         else switchQueryTab(t.id);
       };
+      makeTabDraggable(tab, t.id, qtabs.list, () => { renderQueryTabs(); persistQueryTabs(); });
       bar.appendChild(tab);
     });
     const add = el("button", "query-tab-add", ICON("plus"));
@@ -978,16 +1066,18 @@
     editor.setValue(activeQueryTab().sql || "");
     renderQueryTabs();
     persistQueryTabs();
+    schedulePreview();            // reflect the switched-to tab's query
   }
 
   function addQueryTab() {
     persistQueryTabs();
     qtabs.seq += 1;
-    // number = rightmost tab's number + 1 (ids stay unique via seq)
-    const last = qtabs.list[qtabs.list.length - 1];
-    const m = last && /#(\d+)\s*$/.exec(last.title);
-    const n = (m ? parseInt(m[1], 10) : 0) + 1;
-    const t = { id: qtabs.seq, title: `Query #${n}`, sql: "" };
+    // number = biggest existing number + 1 (stable under drag-reordering; ids stay unique via seq)
+    const n = qtabs.list.reduce((mx, t) => {
+      const m = /#(\d+)\s*$/.exec(t.title);
+      return Math.max(mx, m ? parseInt(m[1], 10) : 0);
+    }, 0) + 1;
+    const t = { id: qtabs.seq, title: "Query #" + n, sql: "" };  // canonical EN; localized at render
     qtabs.list.push(t);
     qtabs.active = t.id;
     editor.setValue("");
@@ -1046,9 +1136,32 @@
     const section = (t) => body.appendChild(el("div", "set-section", esc(t)));
     const add = (n) => body.appendChild(n);
 
+    // language — lives in its own store (sl.lang), switches the UI live
+    section("Language");
+    const langRow = el("div", "set-row");
+    langRow.appendChild(el("span", "set-label", "Language"));
+    langRow.appendChild(mkSelect(
+      I18N.langs.map((l) => [l.code, l.label]),
+      I18N.lang, (v) => I18N.set(v), "set-select"));
+    add(langRow);
+
     // theme — dark and light families get their own subtitle
     const themeField = el("div", "field", `<label>Theme</label>`);
     body.appendChild(themeField);
+    // "System" follows the OS (dark → Nocturne, light → Paper)
+    themeField.appendChild(el("div", "theme-mode-head", "Auto"));
+    const sysGrid = el("div", "theme-grid");
+    const sysCard = el("button", "theme-card" + (state.theme === "system" ? " active" : ""));
+    sysCard.innerHTML =
+      `<span class="theme-dot" style="background:linear-gradient(135deg,#7b6cf6 0 50%,#5b4ee0 50% 100%)"></span>` +
+      `<span class="theme-name">System</span><span class="theme-sub">follows your OS</span>`;
+    sysCard.onclick = () => {
+      applyTheme("system");
+      $$(".theme-card", themeField).forEach((c) => c.classList.remove("active"));
+      sysCard.classList.add("active");
+    };
+    sysGrid.appendChild(sysCard);
+    themeField.appendChild(sysGrid);
     [["Dark", THEMES.filter((t) => !LIGHT_THEMES.includes(t.id))],
      ["Light", THEMES.filter((t) => LIGHT_THEMES.includes(t.id))]].forEach(([mode, list]) => {
       themeField.appendChild(el("div", "theme-mode-head", mode));
@@ -1095,6 +1208,7 @@
     section("Query & safety");
     add(swRow("Confirm destructive statements", "confirmDestructive"));
     add(swRow("Read-only mode (block all writes)", "readOnly"));
+    add(swRow("Preview writes before applying", "previewWrites", schedulePreview));
     add(selRow("Browse page size", "pageSize",
       [[25], [50], [100], [250], [500]],
       () => { if (!$("#browseView").hidden && browse.table) { browse.offset = 0; reloadBrowse(); } }));
@@ -1106,7 +1220,7 @@
     add(selRow("History entries shown", "maxHistory",
       [[50], [100], [200]], loadHistory));
     add(btnRow("Query history", "Clear all", "danger", async () => {
-      if (!confirm("Clear all query history?")) return;
+      if (!(await askConfirm("Clear all query history?", { title: "Clear history", confirmLabel: "Clear all" }))) return;
       await API.clearHistory();
       loadHistory();
       toast("History cleared", "ok");
@@ -1125,11 +1239,25 @@
     add(selRow("CSV delimiter", "csvDelimiter",
       [[",", "comma ,"], [";", "semicolon ;"], ["\t", "tab"]]));
     add(swRow("CSV header row", "csvHeader"));
+    add(selRow("Range-copy separator", "rangeSep",
+      [["tab", "Tab"], ["comma", "Comma"], ["semicolon", "Semicolon"], ["pipe", "Pipe"]]));
     add(swRow("Auto-backup before destructive SQL (keeps last 5)", "autoBackup"));
-    add(btnRow("Saved diagram layouts", "Forget", "ghost", () => {
-      Object.keys(localStorage)
-        .filter((k) => k.startsWith("sl.erd.")).forEach((k) => localStorage.removeItem(k));
-      toast("Diagram layouts forgotten", "ok");
+
+    section("Debug");
+    add(btnRow("Replay the welcome tour", "Replay", "ghost", () => { closeModal(); startWizard(); }));
+    add(btnRow("Service worker & caches", "Clear & reload", "ghost", async () => {
+      await wipeCachesAndSW();
+      location.reload();
+    }));
+    add(btnRow("Reset everything (databases, settings, tutorial)", "Clear everything", "danger", async () => {
+      if (!(await askConfirm(
+        "Delete ALL databases, settings and cached data, then reload? This cannot be undone.",
+        { title: "Clear everything", confirmLabel: "Clear everything" }))) return;
+      wiping = true;              // stop beforeunload from re-saving query tabs
+      wipeLocalState();
+      await API.wipeStorage();
+      await wipeCachesAndSW();
+      location.reload();
     }));
 
     add(el("div", "field", `<div class="hint" style="margin-top:14px">SequenceLab runs fully offline. Databases are stored as real .db files in the app's data/ folder; settings live in this browser.</div>`));
@@ -1233,11 +1361,16 @@
       const risky = stmts.filter((s) =>
         RISKY_STMT.test(s.text) ||
         (/^\s*(delete|update)\b/i.test(s.text) && !/\bwhere\b/i.test(s.text)));
-      if (risky.length && !confirm(
-        `About to run ${risky.length} destructive statement(s):\n\n` +
-        risky.map((s) => s.text.slice(0, 80)).join("\n") +
-        "\n\nContinue?")) return;
+      if (risky.length && !(await askConfirm(
+        I18N.t("About to run {0} destructive statement(s):\n\n{1}\n\nContinue?",
+          risky.length, risky.map((s) => s.text.slice(0, 80)).join("\n")),
+        { title: "Run destructive SQL", confirmLabel: "Run" }))) return;
     }
+    await runSqlNow(sql);
+  }
+
+  async function runSqlNow(sql) {
+    const hasWrite = splitWithOffsets(sql).some((s) => WRITE_STMT.test(s.text));
     persistQueryTabs();
     setStatus("Running…");
     runningQid = "q" + Date.now() + Math.random().toString(36).slice(2, 7);
@@ -1247,7 +1380,7 @@
     runningQid = null;
     setRunState(false);
     const ms = (performance.now() - t0).toFixed(0);
-    setStatus(`Done in ${res.duration_ms ?? ms} ms`);
+    setStatus(I18N.t("Done in {0} ms", res.duration_ms ?? ms));
 
     if (res.error) {
       addResultTab({
@@ -1270,6 +1403,7 @@
     }
     await loadHistory();
     refreshSchema(); // schema may have changed (DDL)
+    schedulePreview(); // the data changed — refresh the live write preview
   }
 
   function setStatus(s) {
@@ -1329,6 +1463,16 @@
     renderActiveResult();
   }
 
+  // tab titles are stored as canonical English; localize them at render time so
+  // they follow live language switches (and reverse cleanly back to English).
+  function localizeTitle(title) {
+    let m;
+    if ((m = /^(#\d+ )?Result \((\d+)\)$/.exec(title))) return (m[1] || "") + I18N.t("Result ({0})", m[2]);
+    if ((m = /^Preview \((\d+)\)$/.exec(title))) return I18N.t("Preview ({0})", m[2]);
+    if ((m = /^Query #(\d+)$/.exec(title))) return I18N.t("Query #{0}", m[1]);
+    return I18N.t(title); // plain keys (OK, Error); identifiers pass through unchanged
+  }
+
   function renderTabs() {
     const bar = $("#resultsTabs");
     bar.innerHTML = "";
@@ -1337,7 +1481,7 @@
         t.kind === "error" ? "err" : t.kind === "browse" ? "tbl" : "ok";
       const tab = el("div", "result-tab" + (t.id === state.activeTab ? " active" : ""));
       tab.innerHTML =
-        `<span class="dot ${dot}"></span><span>${esc(t.title)}</span>` +
+        `<span class="dot ${dot}"></span><span>${esc(localizeTitle(t.title))}</span>` +
         `<span class="tab-close">${ICON("x")}</span>`;
       tab.onclick = (e) => {
         if (e.target.closest(".tab-close")) {
@@ -1348,6 +1492,7 @@
           renderActiveResult();
         }
       };
+      makeTabDraggable(tab, t.id, state.tabs, renderTabs);
       bar.appendChild(tab);
     });
   }
@@ -1374,7 +1519,71 @@
     }
     if (tab.kind === "error") return body.appendChild(renderError(tab));
     if (tab.kind === "message") return body.appendChild(renderMessage(tab));
+    if (tab.kind === "preview") return body.appendChild(renderWritePreview(tab));
     if (tab.kind === "grid") return body.appendChild(renderGrid(tab));
+  }
+
+  // ============================================================ PREVIEW-BEFORE-WRITE
+  // With "Preview writes" on, running a write query first does a transactional
+  // dry-run (API.previewWrite runs it in a savepoint, diffs every table, then
+  // rolls back) and shows the resulting changes in a tab — + insert / − delete /
+  // ~ edit. Apply re-runs the query for real; Discard just closes the tab.
+  // With "Preview writes" on, the preview tab auto-opens and live-shows what the
+  // write query in the editor would do: the affected table(s) rendered with rows
+  // flickering — green = added, red = deleted, white = edited. Run executes for real.
+  const previewOn = () => !!S.previewWrites;
+  const PV_ID = "tpreview";
+  let previewTimer = null;
+  function schedulePreview() { clearTimeout(previewTimer); previewTimer = setTimeout(updateWritePreview, 350); }
+  async function updateWritePreview() {
+    const drop = () => { if (state.tabs.find((t) => t.id === PV_ID)) closeTab(PV_ID); };
+    if (!previewOn() || !editor) return drop();
+    const sql = (editor.getValue() || "").trim();
+    const hasWrite = sql && splitWithOffsets(sql).some((s) => WRITE_STMT.test(s.text));
+    if (!hasWrite) return drop();
+    const pv = await API.previewWrite(state.db, sql);
+    if (pv.error || !pv.tables) return; // invalid/incomplete while typing → keep the last preview
+    let tab = state.tabs.find((t) => t.id === PV_ID);
+    const firstOpen = !tab;
+    if (!tab) { tab = { id: PV_ID, kind: "preview" }; state.tabs.push(tab); }
+    tab.tables = pv.tables;
+    const changes = pv.tables.reduce((s, t) => s + t.adds + t.dels + t.edits, 0);
+    tab.title = `Preview (${changes})`;
+    if (firstOpen) state.activeTab = PV_ID;
+    renderTabs();
+    if (state.activeTab === PV_ID) renderActiveResult();
+  }
+  function renderWritePreview(tab) {
+    const wrap = el("div", "result-content");
+    const tables = tab.tables || [];
+    const changes = tables.reduce((s, t) => s + t.adds + t.dels + t.edits, 0);
+    const bar = el("div", "result-bar");
+    bar.innerHTML = `<span class="stat"><b>${changes}</b> change${changes !== 1 ? "s" : ""} this query would make · run to apply</span>`;
+    wrap.appendChild(bar);
+    const body = el("div", "pv-grids");
+    if (!changes) body.appendChild(el("div", "pv-empty", "This query changes no rows."));
+    tables.forEach((t) => {
+      body.appendChild(el("div", "pv-tablehead",
+        `${esc(t.table)} — ${esc(I18N.t("{0} added · {1} deleted · {2} edited", t.adds, t.dels, t.edits))}`));
+      const table = el("table", "grid pv-grid");
+      table.setAttribute("data-noi18n", ""); // cell data — never translate
+      const thead = el("thead"), htr = el("tr");
+      htr.appendChild(el("th", "rownum", "#"));
+      t.columns.forEach((c) => { const th = el("th"); th.textContent = c; htr.appendChild(th); });
+      thead.appendChild(htr); table.appendChild(thead);
+      const tb = el("tbody");
+      t.rows.forEach((r, i) => {
+        const tr = el("tr", r.status ? "pvg-" + r.status : "");
+        tr.appendChild(el("td", "rownum", i + 1));
+        r.cells.forEach((v) => tr.appendChild(cellTd(v)));
+        tb.appendChild(tr);
+      });
+      table.appendChild(tb);
+      const gw = el("div", "grid-wrap"); gw.appendChild(table); body.appendChild(gw);
+      if (t.truncated) body.appendChild(el("div", "pv-empty", I18N.t("Showing first {0} rows.", t.rows.length)));
+    });
+    wrap.appendChild(body);
+    return wrap;
   }
 
   const SHORTCUTS = [
@@ -1466,6 +1675,14 @@
       rows = rows.filter((r) =>
         r.some((v) => v !== null && !isBlob(v) && String(v).toLowerCase().includes(q)));
     }
+    const cf = tab.colFilters && Object.entries(tab.colFilters).filter(([, v]) => v);
+    if (cf && cf.length) {
+      const ix = {}; tab.columns.forEach((c, i) => (ix[c.name] = i));
+      rows = rows.filter((r) => cf.every(([col, sub]) => {
+        const v = r[ix[col]];
+        return v != null && !isBlob(v) && String(v).toLowerCase().includes(sub.toLowerCase());
+      }));
+    }
     if (tab.sort) {
       const i = tab.columns.findIndex((c) => c.name === tab.sort.col);
       const dir = tab.sort.dir === "desc" ? -1 : 1;
@@ -1498,8 +1715,10 @@
         const objs = view.rows.map((row) => {
           const o = {}; headers.forEach((h, i) => (o[h] = plain(row[i]))); return o;
         });
-        downloadText("query_result.json", JSON.stringify(objs, null, 2));
+        downloadText("query_result.json", JSON.stringify(objs, null, 2), "application/json");
       } },
+      { label: "Download Excel", onClick: () =>
+        downloadBlob("query_result.xlsx", XLSXMini.build(headers, view.rows.map((row) => row.map(plain)))) },
       { sep: true },
       { label: "Copy as Markdown", onClick: async () => {
         const md = ["| " + headers.join(" | ") + " |",
@@ -1525,13 +1744,35 @@
     ]);
   }
 
+  // whole-table export (Browse + entity menu): CSV streams via the API, JSON
+  // and Excel are built from a full SELECT.
+  async function tableExportData(table, fmt) {
+    if (fmt === "csv")
+      return triggerDownload(API.exportUrl(state.db, { table, ...csvUrlOpts() }), table + ".csv");
+    const res = await API.query(state.db, `SELECT * FROM ${quoteIfNeeded(table)}`, false, false);
+    const r0 = res && res.results && res.results[0];
+    if (res.error || !r0 || r0.kind !== "rows") return toast(res.error || "Nothing to export", "err");
+    const headers = r0.columns, plain = (v) => (isBlob(v) ? "<blob>" : v);
+    if (fmt === "json") {
+      const objs = r0.rows.map((row) => { const o = {}; headers.forEach((h, i) => (o[h] = plain(row[i]))); return o; });
+      downloadText(table + ".json", JSON.stringify(objs, null, 2), "application/json");
+    } else {
+      downloadBlob(table + ".xlsx", XLSXMini.build(headers, r0.rows.map((row) => row.map(plain)), table));
+    }
+  }
+  const exportItems = (table) => [
+    { label: "CSV", onClick: () => tableExportData(table, "csv") },
+    { label: "JSON", onClick: () => tableExportData(table, "json") },
+    { label: "Excel", onClick: () => tableExportData(table, "xlsx") },
+  ];
+
   function renderGrid(tab) {
     const wrap = el("div", "result-content");
     const view = gridView(tab);
     const bar = el("div", "result-bar");
     bar.innerHTML =
-      `<span class="stat"><b>${view.total}</b>${tab.filter ? ` / ${tab.rows.length}` : ""} rows</span>` +
-      (view.capped ? `<span class="stat" style="color:var(--warn)">showing first ${S.maxRows}</span>` : "");
+      `<span class="stat"><b>${view.total}</b>${tab.filter ? ` / ${tab.rows.length}` : ""} ${esc(I18N.t("rows"))}</span>` +
+      (view.capped ? `<span class="stat" style="color:var(--warn)">${esc(I18N.t("showing first {0}", S.maxRows))}</span>` : "");
     const filter = el("input", "mini-input grid-filter");
     filter.placeholder = "Filter rows…";
     filter.value = tab.filter || "";
@@ -1552,6 +1793,7 @@
       tab.rows.some((r) => typeof r[i] === "number"));
     if (numericCols.length)
       bar.appendChild(mkBtn("Chart", "ghost", () => chartModal(tab)));
+    bar.appendChild(mkBtn(ICON("save") + "Save as table", "ghost", () => saveResultAsTable(tab)));
     const exp = mkBtn(ICON("download") + "Export", "ghost", () => {});
     exp.onclick = (e) => exportMenu(e, tab, gridView(tab));
     bar.appendChild(exp);
@@ -1563,12 +1805,253 @@
     return wrap;
   }
 
+  // ---- rectangular cell selection + copy (result grids & Browse) ----
+  // Tables expose _cells (2D raw values aligned to displayed columns); data
+  // cells carry data-r/data-c. Drag or shift-click selects a rectangle;
+  // Ctrl/Cmd+C copies it as TSV. A plain click is untouched (opens the record).
+  let gridSel = null;
+  function paintGridSel() {
+    const { table, r0, c0, r1, c1 } = gridSel;
+    const lr = Math.min(r0, r1), hr = Math.max(r0, r1), lc = Math.min(c0, c1), hc = Math.max(c0, c1);
+    table.querySelectorAll("td[data-c]").forEach((td) => {
+      const r = +td.dataset.r, c = +td.dataset.c;
+      td.classList.toggle("cell-sel", r >= lr && r <= hr && c >= lc && c <= hc);
+    });
+  }
+  function clearGridSel() {
+    if (gridSel) gridSel.table.querySelectorAll("td.cell-sel").forEach((td) => td.classList.remove("cell-sel"));
+    gridSel = null;
+  }
+  // when the record panel is open, mirror the selection's anchor row into it
+  // (no auto-open — opening is manual via the panel toggle)
+  function recordFromGridSel() {
+    if (!gridSel || $("#jsonPanel").hidden) return;
+    const t = gridSel.table;
+    if (!t._cells || !t._cells[gridSel.r0]) return;
+    const obj = {};
+    (t._cols || []).forEach((name, i) => (obj[name] = t._cells[gridSel.r0][i]));
+    showRecord(obj, t._srcTable || null);
+  }
+  function enableRangeSelect(table) {
+    let anchor = null, dragging = false, moved = false, rowDrag = false;
+    const lastCol = () => ((table._cols && table._cols.length) || 1) - 1;
+    table.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest("input, textarea, .cell-edit")) return; // don't hijack an open editor
+      // clicking the # cell selects the whole row (shift-click / drag extends)
+      const rn = e.target.closest("td.rownum");
+      if (rn && rn.dataset.r !== undefined) {
+        const r = +rn.dataset.r;
+        if (e.shiftKey && gridSel && gridSel.table === table) { gridSel.r1 = r; }
+        else { clearGridSel(); gridSel = { table, r0: r, c0: 0, r1: r, c1: lastCol() }; }
+        gridSel.c0 = 0; gridSel.c1 = lastCol();
+        anchor = { r, c: 0 }; dragging = true; moved = true; rowDrag = true;
+        table.classList.add("range-dragging"); paintGridSel(); recordFromGridSel(); e.preventDefault();
+        return;
+      }
+      const td = e.target.closest("td[data-c]");
+      if (!td) return;
+      const r = +td.dataset.r, c = +td.dataset.c;
+      if (e.shiftKey && gridSel && gridSel.table === table) {
+        gridSel.r1 = r; gridSel.c1 = c; moved = true; rowDrag = false; paintGridSel(); recordFromGridSel(); e.preventDefault(); return;
+      }
+      // a plain click selects that single cell (drag extends the rectangle)
+      clearGridSel();
+      gridSel = { table, r0: r, c0: c, r1: r, c1: c };
+      anchor = { r, c }; dragging = true; moved = false; rowDrag = false;
+      table.classList.add("range-dragging");
+      paintGridSel(); recordFromGridSel();
+    });
+    table.addEventListener("mouseover", (e) => {
+      if (!dragging) return;
+      if (rowDrag) {
+        const cell = e.target.closest("td[data-c], td.rownum");
+        if (!cell || cell.dataset.r === undefined) return;
+        gridSel.r1 = +cell.dataset.r; gridSel.c0 = 0; gridSel.c1 = lastCol();
+        paintGridSel(); return;
+      }
+      const td = e.target.closest("td[data-c]");
+      if (!td) return;
+      gridSel.r1 = +td.dataset.r; gridSel.c1 = +td.dataset.c; moved = true;
+      paintGridSel();
+    });
+    table.addEventListener("mouseup", () => {
+      const wasDrag = dragging && moved;   // only a real drag/selection swallows the trailing click
+      dragging = false; rowDrag = false; table.classList.remove("range-dragging");
+      table._selDrag = wasDrag; setTimeout(() => (table._selDrag = false), 0);
+    });
+    // a drag (or shift-click) must not also fire the row's record-open click
+    table.addEventListener("click", (e) => {
+      if (table._selDrag || e.shiftKey) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    // right-click inside an active selection → range menu (separators + create table)
+    table.addEventListener("contextmenu", (e) => {
+      if (!gridSel || gridSel.table !== table) return;
+      const td = e.target.closest("td[data-c]");
+      if (!td) return;
+      const r = +td.dataset.r, c = +td.dataset.c, { lr, hr, lc, hc } = selRect();
+      if (r < lr || r > hr || c < lc || c > hc) return;   // outside selection → default cell menu
+      if (lr === hr && lc === hc) return;                  // single cell → keep its normal cell menu
+      e.preventDefault(); e.stopPropagation();
+      rangeContextMenu(e);
+    }, true);
+  }
+  const RANGE_SEPS = { tab: "\t", comma: ",", semicolon: ";", pipe: "|" };
+  const RANGE_SEP_LABELS = { tab: "Tab", comma: "Comma", semicolon: "Semicolon", pipe: "Pipe" };
+  function selRect() {
+    const { r0, c0, r1, c1 } = gridSel;
+    return { lr: Math.min(r0, r1), hr: Math.max(r0, r1), lc: Math.min(c0, c1), hc: Math.max(c0, c1) };
+  }
+  function copyGridSel(sepKey) {
+    if (!gridSel || !gridSel.table._cells) return;
+    sepKey = sepKey || S.rangeSep || "tab";
+    const sep = RANGE_SEPS[sepKey] || "\t";
+    const quote = (s) => sepKey === "tab" ? s
+      : (/["\n\r]/.test(s) || s.includes(sep)) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    const { table } = gridSel, { lr, hr, lc, hc } = selRect();
+    const lines = [];
+    for (let r = lr; r <= hr; r++) {
+      const row = table._cells[r] || [], out = [];
+      for (let c = lc; c <= hc; c++) {
+        const v = row[c];
+        out.push(quote(v == null ? "" : isBlob(v) ? "<blob>" : String(v)));
+      }
+      lines.push(out.join(sep));
+    }
+    const n = (hr - lr + 1) * (hc - lc + 1);
+    navigator.clipboard.writeText(lines.join("\n"))
+      .then(() => toast(I18N.t("Copied {0} cells ({1})", n, RANGE_SEP_LABELS[sepKey]), "ok"))
+      .catch(() => toast("Clipboard blocked by browser", "err"));
+  }
+  function rangeContextMenu(e) {
+    const sepItem = (key) => ({ label: RANGE_SEP_LABELS[key] + "-separated", onClick: () => copyGridSel(key) });
+    showCtxMenu(e.clientX, e.clientY, [
+      { icon: "copy", label: `Copy (${RANGE_SEP_LABELS[S.rangeSep] || "Tab"})`, onClick: () => copyGridSel() },
+      { icon: "copy", label: "Copy as", sub: () => [sepItem("tab"), sepItem("comma"), sepItem("semicolon"), sepItem("pipe")] },
+      { sep: true },
+      { icon: "table", label: "Create table from selection", onClick: () => createTableFromSelection() },
+    ]);
+  }
+  function createTableFromSelection() {
+    if (!gridSel || !gridSel.table._cells || !gridSel.table._cols) return;
+    const { table } = gridSel, { lr, hr, lc, hc } = selRect();
+    const cols = [];
+    for (let c = lc; c <= hc; c++) cols.push(table._cols[c]);
+    const rows = [];
+    for (let r = lr; r <= hr; r++) {
+      const o = {};
+      for (let c = lc; c <= hc; c++) {
+        const v = table._cells[r][c];
+        o[table._cols[c]] = isBlob(v) || v === undefined ? null : v;
+      }
+      rows.push(o);
+    }
+    const body = el("div");
+    body.innerHTML =
+      `<div class="field"><label>New table name</label>
+         <input id="ctsName" type="text" placeholder="my_table" /></div>
+       <div class="hint">${rows.length} row${rows.length > 1 ? "s" : ""} × ${cols.length} column${cols.length > 1 ? "s" : ""}; types inferred. Stored in <b>${esc(state.db)}</b>.</div>`;
+    const go = mkBtn("Create", "primary", async () => {
+      const name = body.querySelector("#ctsName").value.trim();
+      if (!name) return toast("Table name required", "err");
+      if (S.readOnly) return toast("Read-only mode is on (see Settings).", "err");
+      const res = await API.importJson({ db: state.db, table: name, json: JSON.stringify(rows), create: true, backup: S.autoBackup });
+      if (res.error) return toast(res.error, "err");
+      closeModal();
+      toast(I18N.t("Created {0} ({1} rows)", name, res.inserted ?? rows.length), "ok");
+      await refreshSchema();
+    });
+    openModal("Create table from selection", body, [mkBtn("Cancel", "ghost", closeModal), go]);
+    setTimeout(() => { const i = body.querySelector("#ctsName"); i.focus(); i.onkeydown = (ev) => { if (ev.key === "Enter") go.click(); }; }, 30);
+  }
+  document.addEventListener("keydown", (e) => {
+    if (!gridSel) return;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+    if ((e.key === "c" || e.key === "C") && (e.ctrlKey || e.metaKey)) {
+      if (window.getSelection && String(window.getSelection())) return; // honor a real text selection
+      e.preventDefault(); copyGridSel();
+    } else if (e.key === "Delete") {
+      e.preventDefault(); deleteSelectedRows();
+    } else if (e.key === "Backspace") {
+      e.preventDefault(); nullSelectedCells();
+    }
+  });
+
+  // Delete key → drop the selected rows (Browse only — needs rowids)
+  async function deleteSelectedRows() {
+    if (!gridSel || state.view !== "browse" || !browse.data)
+      return toast("Select rows in Browse to delete them.", "err");
+    if (!browse.data.has_rowid)
+      return toast("This is a view (or a table without a rowid) — its rows can't be deleted.", "err");
+    if (S.readOnly) return toast("Read-only mode is on (see Settings).", "err");
+    const { lr, hr } = selRect();
+    const ids = [];
+    for (let i = lr; i <= hr; i++) { const row = browse.data.rows[i]; if (row && row.__rowid__ != null) ids.push(row.__rowid__); }
+    if (!ids.length) return;
+    if (!(await askConfirm(I18N.t("Delete {0} selected rows?", ids.length),
+      { title: "Delete rows", confirmLabel: "Delete" }))) return;
+    let failed = 0, lastErr = "";
+    for (const id of ids) { const res = await API.deleteRow(state.db, browse.table, { __rowid__: id }); if (res.error) { failed++; lastErr = res.error; } }
+    clearGridSel();
+    toast(failed ? `Deleted ${ids.length - failed}, ${failed} failed — ${lastErr}` : `Deleted ${ids.length} row${ids.length > 1 ? "s" : ""}`, failed ? "err" : "ok");
+    reloadBrowse(); refreshSchema();
+  }
+
+  // Backspace key → set the selected cells to NULL (Browse + editable result grids)
+  async function nullSelectedCells() {
+    if (!gridSel) return;
+    if (S.readOnly) return toast("Read-only mode is on (see Settings).", "err");
+    const { lr, hr, lc, hc } = selRect();
+    if (state.view === "browse" && browse.data) {
+      if (!browse.data.has_rowid) return toast("This is a view (or a table without a rowid) — its cells can't be edited.", "err");
+      const cols = browse.data.columns;
+      let count = 0, failed = 0, lastErr = "";
+      for (let i = lr; i <= hr; i++) {
+        const row = browse.data.rows[i]; if (!row) continue;
+        const changes = {};
+        for (let c = lc; c <= hc; c++) if (cols[c]) changes[cols[c].name] = null;
+        if (!Object.keys(changes).length) continue;
+        const res = await API.updateRow(state.db, browse.table, { __rowid__: row.__rowid__ }, changes);
+        if (res.error) { failed++; lastErr = res.error; } else count += Object.keys(changes).length;
+      }
+      clearGridSel();
+      toast(failed ? `${failed} cell update(s) failed — ${lastErr}` : `Set ${count} cell${count > 1 ? "s" : ""} to NULL`, failed ? "err" : "ok");
+      reloadBrowse();
+      return;
+    }
+    const tab = state.tabs.find((t) => t.id === state.activeTab);
+    if (!tab || tab.kind !== "grid") return;
+    const info = await ensureRowids(tab);
+    if (info.bad) return toast("This result can't be edited inline.", "err");
+    let failed = 0, lastErr = "";
+    for (let i = lr; i <= hr; i++) {
+      if (info.rowids[i] == null) continue;
+      const changes = {};
+      for (let c = lc; c <= hc; c++) changes[tab.columns[c].name] = null;
+      const res = await API.updateRow(state.db, info.table, { __rowid__: info.rowids[i] }, changes);
+      if (res.error) { failed++; lastErr = res.error; continue; }
+      for (let c = lc; c <= hc; c++) tab.rows[i][c] = null;
+    }
+    clearGridSel(); renderActiveResult();
+    toast(failed ? `${failed} cell update(s) failed — ${lastErr}` : "Cleared selected cells", failed ? "err" : "ok");
+  }
+  // clicking anywhere outside the grid (and not on the range menu) clears the selection
+  document.addEventListener("mousedown", (e) => {
+    if (!gridSel) return;
+    if (e.target.closest("table.grid") || e.target.closest(".ctx-menu") ||
+        e.target.closest("#jsonPanel") || e.target.closest("#btnToggleJson")) return;
+    clearGridSel();
+  });
+
   function buildTable(tab, rows) {
+    gridSel = null;
     const columns = tab.columns;
     if (tab._editAnalysis === undefined) tab._editAnalysis = analyzeEditable(tab.statement);
     const srcTable = tab._editAnalysis ? tab._editAnalysis.table : null;
     const editable = !!tab._editAnalysis && !(tab.edit && tab.edit.bad);
     const table = el("table", "grid");
+    table.setAttribute("data-noi18n", ""); // cell data — never translate
     const thead = el("thead");
     const htr = el("tr");
     htr.appendChild(el("th", "rownum", "#"));
@@ -1584,6 +2067,7 @@
           : { col: c.name, dir: "asc" };
         renderActiveResult();
       };
+      th.oncontextmenu = (e) => resultHeaderMenu(e, tab, c);
       htr.appendChild(th);
     });
     thead.appendChild(htr);
@@ -1591,25 +2075,25 @@
     const tbody = el("tbody");
     rows.forEach((r, i) => {
       const tr = el("tr");
-      tr.appendChild(el("td", "rownum", i + 1));
+      const rnTd = el("td", "rownum", i + 1); rnTd.dataset.r = i; tr.appendChild(rnTd);
       const arr = Array.isArray(r) ? r : columns.map((c) => r[c.name]);
       const origIndex = editable ? tab.rows.indexOf(r) : -1;
       arr.forEach((v, ci) => {
         const td = cellTd(v);
+        td.dataset.r = i; td.dataset.c = ci;
         if (editable && !isBlob(v)) {
           td.classList.add("editable");
           td.ondblclick = () => beginEditResult(td, tab, origIndex, columns[ci].name, v);
         }
         tr.appendChild(td);
       });
-      tr.onclick = () => {
-        const obj = {};
-        columns.forEach((c, ci) => (obj[c.name] = arr[ci]));
-        showRecord(obj, tr, srcTable);
-      };
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
+    table._cells = rows.map((r) => Array.isArray(r) ? r : columns.map((c) => r[c.name]));
+    table._cols = columns.map((c) => c.name);
+    table._srcTable = srcTable;
+    enableRangeSelect(table);
     return table;
   }
 
@@ -1658,16 +2142,14 @@
       return;
     }
     td.classList.add("editing");
-    const input = el("input", "cell-edit");
-    input.type = "text";
-    input.value = oldVal === null || oldVal === undefined ? "" : String(oldVal);
+    const ed = makeCellInput(colEditorKind(null, oldVal), oldVal);
     td.textContent = "";
-    td.appendChild(input);
-    input.focus(); input.select();
+    td.appendChild(ed.root);
+    ed.focus();
     let done = false;
     const commit = async () => {
       if (done) return; done = true;
-      const val = input.value === "" ? null : input.value;
+      const val = ed.read();
       const res = await API.updateRow(state.db, info.table, { __rowid__: info.rowids[rowIndex] }, { [col]: val });
       if (res.error) { toast(res.error, "err"); renderActiveResult(); return; }
       const ci = tab.columns.findIndex((c) => c.name === col);
@@ -1681,11 +2163,12 @@
       td.classList.remove("editing");
       td.textContent = oldVal === null || oldVal === undefined ? S.nullDisplay : String(oldVal);
     };
-    input.onkeydown = (e) => {
+    ed.root.onkeydown = (e) => {
       if (e.key === "Enter") { e.preventDefault(); commit(); }
       else if (e.key === "Escape") { e.preventDefault(); cancel(); }
     };
-    input.onblur = commit;
+    if (ed.live) { ed.root.onchange = commit; ed.root.onblur = cancel; }
+    else ed.root.onblur = commit;
   }
 
   // ---- quick chart (canvas, no libs) ----
@@ -1706,58 +2189,260 @@
       (textish[0] || numeric[0]).i, () => draw(), "set-select");
     const ySel = mkSelect(numeric.map((c) => [c.i, c.name]),
       numeric[0].i, () => draw(), "set-select");
-    const tSel = mkSelect([["bar"], ["line"]], "bar", () => draw(), "set-select");
-    body.appendChild(selRow2("X axis", xSel));
-    body.appendChild(selRow2("Y axis (numeric)", ySel));
-    body.appendChild(selRow2("Type", tSel));
+    const tSel = mkSelect([["bar"], ["line"], ["area"], ["scatter"], ["pie"], ["histogram"]],
+      "bar", () => draw(), "set-select");
+    const tRow = selRow2("Type", tSel), xRow = selRow2("X axis", xSel), yRow = selRow2("Y axis", ySel);
+    body.appendChild(tRow); body.appendChild(xRow); body.appendChild(yRow);
     body.insertAdjacentHTML("beforeend",
       `<canvas id="chCanvas" width="560" height="300" class="chart-canvas"></canvas>`);
+
+    const PIE_VARS = ["--accent", "--blue", "--ok", "--warn", "--purple", "--danger", "--accent-strong"];
+    const fmtNum = (v) => Number.isInteger(v) ? String(v) : (+v.toPrecision(4)).toString();
+
     const draw = () => {
       const xi = +xSel.getValue(), yi = +ySel.getValue(), type = tSel.getValue();
-      const rows = gridView(tab).rows.slice(0, 60);
+      xRow.style.display = type === "histogram" ? "none" : "";
+      xRow.querySelector(".set-label").textContent = type === "pie" ? "Category" : "X axis";
+      yRow.querySelector(".set-label").textContent =
+        type === "pie" ? "Value" : type === "histogram" ? "Values" : "Y axis";
       const cv = body.querySelector("#chCanvas"), ctx = cv.getContext("2d");
       const cs = getComputedStyle(document.documentElement);
       const C = (n) => cs.getPropertyValue(n).trim();
       ctx.clearRect(0, 0, cv.width, cv.height);
-      const vals = rows.map((r) => Number(r[yi]) || 0);
-      const max = Math.max(...vals, 0), min = Math.min(...vals, 0);
-      const span = max - min || 1;
+      const rows = gridView(tab).rows.slice(0, type === "scatter" ? 2000 : type === "pie" ? 500 : 200);
+      if (!rows.length) { ctx.fillStyle = C("--faint"); ctx.font = "12px " + C("--sans"); ctx.fillText("No rows to chart", 20, 30); return; }
+
+      if (type === "pie") return drawPie(ctx, cv, C, rows, xi, yi);
+
       const L = 44, B = 36, W = cv.width - L - 12, H = cv.height - B - 14;
       ctx.strokeStyle = C("--border-2"); ctx.lineWidth = 1;
       ctx.strokeRect(L, 10, W, H);
-      ctx.fillStyle = C("--muted"); ctx.font = "10px " + C("--mono");
-      ctx.textAlign = "right";
-      ctx.fillText(String(max), L - 5, 18);
-      ctx.fillText(String(min), L - 5, 12 + H);
-      const y0 = 10 + H - ((0 - min) / span) * H;
-      const n = rows.length, bw = W / Math.max(n, 1);
-      ctx.fillStyle = C("--accent");
-      if (type === "bar") {
-        rows.forEach((r, i) => {
-          const h = ((Number(r[yi]) || 0) - min) / span * H;
-          ctx.fillRect(L + i * bw + bw * 0.15, 10 + H - h, bw * 0.7, h - (y0 - (10 + H)) * 0);
-        });
-      } else {
-        ctx.strokeStyle = C("--accent"); ctx.lineWidth = 2;
-        ctx.beginPath();
-        rows.forEach((r, i) => {
-          const x = L + i * bw + bw / 2;
-          const y = 10 + H - (((Number(r[yi]) || 0) - min) / span) * H;
-          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-        });
-        ctx.stroke();
+
+      if (type === "histogram") {
+        const vals = rows.map((r) => Number(r[yi])).filter((v) => !isNaN(v));
+        const lo = Math.min(...vals), hi = Math.max(...vals);
+        const bins = Math.min(12, Math.max(4, Math.round(Math.sqrt(vals.length))));
+        const step0 = (hi - lo) / bins || 1;
+        const counts = new Array(bins).fill(0);
+        vals.forEach((v) => { let k = Math.floor((v - lo) / step0); if (k >= bins) k = bins - 1; if (k < 0) k = 0; counts[k]++; });
+        const cmax = Math.max(...counts, 1), bw = W / bins;
+        ctx.fillStyle = C("--muted"); ctx.font = "10px " + C("--mono"); ctx.textAlign = "right";
+        ctx.fillText(String(cmax), L - 5, 18); ctx.fillText("0", L - 5, 12 + H);
+        ctx.fillStyle = C("--accent");
+        counts.forEach((cnt, i) => ctx.fillRect(L + i * bw + bw * 0.08, 10 + H - cnt / cmax * H, bw * 0.84, cnt / cmax * H));
+        ctx.fillStyle = C("--faint"); ctx.textAlign = "center";
+        for (let i = 0; i <= bins; i += Math.ceil(bins / 6)) ctx.fillText(fmtNum(lo + i * step0), L + i * bw, cv.height - 16);
+        return;
       }
-      // x labels (sparse)
+
+      // bar / line / area / scatter
+      const xNumeric = type === "scatter";
+      const n = rows.length;
+      const ys = rows.map((r) => Number(r[yi]) || 0);
+      const ymax = Math.max(...ys, 0), ymin = Math.min(...ys, 0), yspan = ymax - ymin || 1;
+      let xmin = 0, xspan = 1;
+      if (xNumeric) { const xs = rows.map((r) => Number(r[xi]) || 0); xmin = Math.min(...xs); xspan = (Math.max(...xs) - xmin) || 1; }
+      const unit = W / Math.max(n, 1);
+      const px = (i, r) => xNumeric ? L + ((Number(r[xi]) || 0) - xmin) / xspan * W : L + i * unit + unit / 2;
+      const py = (v) => 10 + H - ((v - ymin) / yspan) * H;
+      ctx.fillStyle = C("--muted"); ctx.font = "10px " + C("--mono"); ctx.textAlign = "right";
+      ctx.fillText(fmtNum(ymax), L - 5, 18); ctx.fillText(fmtNum(ymin), L - 5, 12 + H);
+
+      if (type === "bar") {
+        ctx.fillStyle = C("--accent");
+        rows.forEach((r, i) => { const h = ((Number(r[yi]) || 0) - ymin) / yspan * H; ctx.fillRect(L + i * unit + unit * 0.15, 10 + H - h, unit * 0.7, h); });
+      } else if (type === "scatter") {
+        ctx.fillStyle = C("--accent");
+        rows.forEach((r) => { ctx.beginPath(); ctx.arc(px(0, r), py(Number(r[yi]) || 0), 2.5, 0, Math.PI * 2); ctx.fill(); });
+      } else { // line / area
+        ctx.strokeStyle = C("--accent"); ctx.lineWidth = 2; ctx.beginPath();
+        rows.forEach((r, i) => { const x = px(i, r), y = py(Number(r[yi]) || 0); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        ctx.stroke();
+        if (type === "area") {
+          ctx.lineTo(px(n - 1, rows[n - 1]), 10 + H); ctx.lineTo(px(0, rows[0]), 10 + H); ctx.closePath();
+          ctx.globalAlpha = 0.18; ctx.fillStyle = C("--accent"); ctx.fill(); ctx.globalAlpha = 1;
+        }
+      }
       ctx.fillStyle = C("--faint"); ctx.textAlign = "center";
-      const step = Math.ceil(n / 8);
+      const lstep = Math.ceil(n / 8);
       rows.forEach((r, i) => {
-        if (i % step) return;
-        const lbl = String(r[xi] ?? i + 1).slice(0, 9);
-        ctx.fillText(lbl, L + i * bw + bw / 2, cv.height - 16);
+        if (i % lstep) return;
+        ctx.fillText(String(xNumeric ? fmtNum(Number(r[xi]) || 0) : (r[xi] ?? i + 1)).slice(0, 9), px(i, r), cv.height - 16);
       });
     };
-    openModal("Chart", body, [mkBtn("Close", "primary", closeModal)]);
+
+    function drawPie(ctx, cv, C, rows, xi, yi) {
+      const agg = new Map();
+      rows.forEach((r) => { const k = r[xi] == null ? "∅" : String(r[xi]); agg.set(k, (agg.get(k) || 0) + (Number(r[yi]) || 0)); });
+      let entries = [...agg.entries()].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+      if (entries.length > 8) {
+        const rest = entries.slice(7).reduce((s, [, v]) => s + v, 0);
+        entries = [...entries.slice(0, 7), ["Other", rest]];
+      }
+      const total = entries.reduce((s, [, v]) => s + v, 0) || 1;
+      const cx = 150, cy = cv.height / 2, rad = 110;
+      let a0 = -Math.PI / 2;
+      entries.forEach(([, v], i) => {
+        const a1 = a0 + (v / total) * Math.PI * 2;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, rad, a0, a1); ctx.closePath();
+        ctx.fillStyle = C(PIE_VARS[i % PIE_VARS.length]); ctx.fill();
+        a0 = a1;
+      });
+      ctx.textAlign = "left"; ctx.font = "11px " + C("--mono");
+      entries.forEach(([k, v], i) => {
+        const ly = 28 + i * 20;
+        ctx.fillStyle = C(PIE_VARS[i % PIE_VARS.length]); ctx.fillRect(300, ly - 9, 11, 11);
+        ctx.fillStyle = C("--text");
+        ctx.fillText(`${String(k).slice(0, 16)}  ${(v / total * 100).toFixed(1)}%`, 318, ly);
+      });
+    }
+
+    const exportPng = () => body.querySelector("#chCanvas").toBlob((b) => downloadBlob(`chart_${tSel.getValue()}.png`, b), "image/png");
+    const copyPng = () => body.querySelector("#chCanvas").toBlob(async (b) => {
+      try { await navigator.clipboard.write([new ClipboardItem({ "image/png": b })]); toast("Chart copied", "ok"); }
+      catch (_) { toast("Clipboard blocked by browser", "err"); }
+    }, "image/png");
+
+    openModal("Chart", body, [
+      mkBtn(ICON("copy") + "Copy", "ghost", copyPng),
+      mkBtn(ICON("download") + "PNG", "ghost", exportPng),
+      mkBtn("Close", "primary", closeModal),
+    ]);
     draw();
+  }
+
+  // ---- column right-click menu (result grids) ----
+  function resultHeaderMenu(e, tab, c) {
+    e.preventDefault();
+    const items = [
+      { icon: "arrow-up", label: "Sort ascending", onClick: () => { tab.sort = { col: c.name, dir: "asc" }; renderActiveResult(); } },
+      { icon: "arrow-down", label: "Sort descending", onClick: () => { tab.sort = { col: c.name, dir: "desc" }; renderActiveResult(); } },
+      { sep: true },
+      { icon: "filter", label: "Filter this column…", onClick: () => filterResultColumn(tab, c.name) },
+    ];
+    if (tab.colFilters && Object.keys(tab.colFilters).some((k) => tab.colFilters[k]))
+      items.push({ icon: "x", label: "Clear column filters", onClick: () => { tab.colFilters = {}; renderActiveResult(); } });
+    items.push({ sep: true });
+    items.push({ icon: "chart", label: "Column stats", onClick: () => columnStatsResult(tab, c.name) });
+    items.push({ icon: "copy", label: "Copy column name", onClick: async () => {
+      try { await navigator.clipboard.writeText(c.name); toast("Copied", "ok"); }
+      catch (_) { toast("Clipboard blocked by browser", "err"); }
+    } });
+    showCtxMenu(e.clientX, e.clientY, items);
+  }
+
+  function filterResultColumn(tab, col) {
+    const body = el("div");
+    body.innerHTML =
+      `<div class="field"><label>Show rows where <b>${esc(col)}</b> contains</label>
+         <input id="rcf" type="text" value="${esc((tab.colFilters && tab.colFilters[col]) || "")}" placeholder="substring (empty = clear)" /></div>`;
+    const go = mkBtn("Apply", "primary", () => {
+      tab.colFilters = tab.colFilters || {};
+      const v = body.querySelector("#rcf").value;
+      if (v) tab.colFilters[col] = v; else delete tab.colFilters[col];
+      closeModal(); renderActiveResult();
+    });
+    openModal("Filter column", body, [mkBtn("Cancel", "ghost", closeModal), go]);
+    setTimeout(() => { const i = body.querySelector("#rcf"); i.focus(); i.onkeydown = (ev) => { if (ev.key === "Enter") go.click(); }; }, 30);
+  }
+
+  // ---- column stats popup (shared by Browse + result grids) ----
+  const fmtStat = (v) => v == null ? "—"
+    : (typeof v === "number" ? (Number.isInteger(v) ? String(v) : String(+v.toPrecision(6))) : String(v));
+
+  function statCmp(a, b) {
+    if (typeof a === "number" && typeof b === "number") return a - b;
+    return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+  }
+  function statsFromValues(values) {
+    let nonNull = 0, min = null, max = null, sum = 0, nums = 0;
+    const freq = new Map();
+    for (const v of values) {
+      const key = v == null ? null : (isBlob(v) ? "‹blob›" : v);
+      freq.set(key, (freq.get(key) || 0) + 1);
+      if (v == null) continue;
+      nonNull++;
+      if (typeof v === "number") { sum += v; nums++; }
+      if (!isBlob(v)) {
+        if (min === null || statCmp(v, min) < 0) min = v;
+        if (max === null || statCmp(v, max) > 0) max = v;
+      }
+    }
+    const numeric = nonNull > 0 && nums === nonNull;
+    return {
+      count: values.length, nonNull, nulls: values.length - nonNull,
+      distinct: [...freq.keys()].filter((k) => k !== null).length,
+      min, max, numeric, sum: numeric ? sum : null, avg: numeric && nonNull ? sum / nonNull : null,
+      top: [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8),
+    };
+  }
+  function openStatsModal(title, s) {
+    const body = el("div", "stats-body");
+    const rows = [["Rows", s.count], ["Non-null", s.nonNull], ["Nulls", s.nulls],
+      ["Distinct", s.distinct], ["Min", fmtStat(s.min)], ["Max", fmtStat(s.max)]];
+    if (s.numeric) rows.push(["Sum", fmtStat(s.sum)], ["Average", fmtStat(s.avg)]);
+    body.innerHTML = `<div class="stats-grid">` +
+      rows.map(([k, v]) => `<div class="stats-row"><span class="stats-k">${esc(k)}</span><span class="stats-v">${esc(String(v))}</span></div>`).join("") +
+      `</div>`;
+    if (s.top && s.top.length) {
+      const sec = el("div");
+      sec.innerHTML = `<div class="stats-sec-head">Top values</div>`;
+      s.top.forEach(([v, n]) => {
+        const r = el("div", "stats-top-row");
+        r.innerHTML = `<span class="stats-top-v">${esc(v === null ? S.nullDisplay : String(v))}</span><span class="stats-top-n">${n}</span>`;
+        sec.appendChild(r);
+      });
+      body.appendChild(sec);
+    }
+    openModal(I18N.t("Stats · {0}", title), body, [mkBtn("Close", "primary", closeModal)]);
+  }
+  function columnStatsResult(tab, col) {
+    const ci = tab.columns.findIndex((c) => c.name === col);
+    openStatsModal(col, statsFromValues(tab.rows.map((r) => Array.isArray(r) ? r[ci] : r[col])));
+  }
+  async function columnStatsBrowse(col) {
+    const t = quoteIfNeeded(browse.table), q = quoteIfNeeded(col);
+    const w = browse.where ? ` WHERE ${browse.where}` : "";
+    const aggSql =
+      `SELECT COUNT(*) c, COUNT(${q}) nn, COUNT(DISTINCT ${q}) d, MIN(${q}) mn, MAX(${q}) mx, ` +
+      `SUM(CASE WHEN typeof(${q}) IN ('integer','real') THEN ${q} END) sm, ` +
+      `AVG(CASE WHEN typeof(${q}) IN ('integer','real') THEN ${q} END) av, ` +
+      `SUM(CASE WHEN ${q} IS NOT NULL AND typeof(${q}) NOT IN ('integer','real') THEN 1 ELSE 0 END) nonnum FROM ${t}${w}`;
+    const aggRes = await API.query(state.db, aggSql, false, false);
+    if (aggRes.error) return toast(aggRes.error, "err");
+    const ar = aggRes.results[0], g = (n) => ar.rows[0][ar.columns.indexOf(n)];
+    const count = g("c"), nn = g("nn"), numeric = nn > 0 && g("nonnum") === 0;
+    const topRes = await API.query(state.db,
+      `SELECT ${q} v, COUNT(*) n FROM ${t}${w} GROUP BY ${q} ORDER BY n DESC LIMIT 8`, false, false);
+    const top = topRes.error ? [] : topRes.results[0].rows.map((r) => [r[0], r[1]]);
+    openStatsModal(col, {
+      count, nonNull: nn, nulls: count - nn, distinct: g("d"),
+      min: g("mn"), max: g("mx"), numeric, sum: numeric ? g("sm") : null, avg: numeric ? g("av") : null, top,
+    });
+  }
+
+  // ---- save a result grid as a new table ----
+  function saveResultAsTable(tab) {
+    const stmt = (tab.statement || "").trim().replace(/;+\s*$/, "");
+    if (!/^(select|with)\b/i.test(stmt))
+      return toast("Only query (SELECT) results can be saved as a table.", "err");
+    const body = el("div");
+    body.innerHTML =
+      `<div class="field"><label>New table name</label>
+         <input id="satName" type="text" placeholder="my_table" /></div>
+       <div class="hint">Runs <code>CREATE TABLE … AS</code> against <b>${esc(state.db)}</b>.</div>`;
+    const go = mkBtn("Create", "primary", async () => {
+      const name = body.querySelector("#satName").value.trim();
+      if (!name) return toast("Table name required", "err");
+      if (S.readOnly) return toast("Read-only mode is on (see Settings).", "err");
+      const res = await API.query(state.db, `CREATE TABLE ${quoteIfNeeded(name)} AS ${stmt}`, false, S.autoBackup);
+      if (res.error) return toast(res.error + (res.explanation ? " — " + res.explanation : ""), "err");
+      closeModal();
+      toast(I18N.t("Created {0}", name), "ok");
+      await refreshSchema();
+    });
+    openModal("Save result as table", body, [mkBtn("Cancel", "ghost", closeModal), go]);
+    setTimeout(() => { const i = body.querySelector("#satName"); i.focus(); i.onkeydown = (ev) => { if (ev.key === "Enter") go.click(); }; }, 30);
   }
 
   const isBlob = (v) => v && typeof v === "object" && "$blob" in v;
@@ -1834,13 +2519,15 @@
     return lines.join("\n");
   }
 
-  function downloadText(filename, text) {
-    const blob = new Blob([text], { type: "text/csv" });
+  function downloadBlob(filename, blob) {
     const a = el("a");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function downloadText(filename, text, type = "text/csv") {
+    downloadBlob(filename, new Blob([text], { type }));
   }
 
   // ============================================================ BROWSE VIEW
@@ -1912,7 +2599,7 @@
     const list = loadBFilters();
     if (!list.length) {
       host.appendChild(el("div", "bf-empty",
-        "No saved filters yet.<br>Browse a table with a WHERE filter, then press ＋ above to keep it."));
+        I18N.t("No saved filters yet.<br>Browse a table with a WHERE filter, then press ＋ above to keep it.")));
       return;
     }
     list.forEach((f, i) => {
@@ -1927,10 +2614,20 @@
         showCtxMenu(e.clientX, e.clientY, [
           { icon: "play", label: "Apply", onClick: row.onclick },
           { icon: "pencil", label: "Rename", onClick: () => {
-              const nn = prompt("Filter name", f.name);
-              if (!nn || !nn.trim()) return;
-              list[i].name = nn.trim();
-              saveBFilters(list);
+              const body = el("div");
+              body.innerHTML = `<div class="field"><label>Filter name</label>
+                <input id="bfRenameName" type="text" /></div>`;
+              const input = body.querySelector("#bfRenameName");
+              input.value = f.name;
+              const go = mkBtn("Rename", "primary", () => {
+                const nn = input.value.trim();
+                if (!nn) return toast("Filter name required", "err");
+                list[i].name = nn;
+                saveBFilters(list);
+                closeModal();
+              });
+              openModal("Rename filter", body, [mkBtn("Cancel", "ghost", closeModal), go]);
+              setTimeout(() => { input.focus(); input.select(); input.onkeydown = (ev) => { if (ev.key === "Enter") go.click(); }; }, 30);
             } },
           { sep: true },
           { icon: "trash", label: "Delete", danger: true, onClick: () => {
@@ -1947,19 +2644,25 @@
     const body = el("div");
     body.innerHTML =
       `<div class="field"><label>Filter name</label>
-         <input type="text" id="bfName" value="${esc(browse.table + (browse.where ? " — " + browse.where.slice(0, 30) : ""))}" /></div>
-       <div class="field"><div class="hint">Saves <b>${esc(browse.table)}</b>${browse.where ? " WHERE <code>" + esc(browse.where) + "</code>" : " (no WHERE filter)"} — stored in this browser, per database.</div></div>`;
+         <input type="text" id="bfName" placeholder="e.g. Active users" /></div>
+       <div class="field"><label>WHERE filter for <b>${esc(browse.table)}</b></label>
+         <input type="text" id="bfWhere" value="${esc(browse.where || "")}" placeholder="price > 100 AND category = 'Audio'" /></div>
+       <div class="field"><div class="hint">Stored in this browser, per database.</div></div>`;
+    const nameI = body.querySelector("#bfName");
+    const whereI = body.querySelector("#bfWhere");
     const go = mkBtn("Save filter", "primary", () => {
-      const name = body.querySelector("#bfName").value.trim();
-      if (!name) return toast("Name required", "err");
+      const name = nameI.value.trim(), where = whereI.value.trim();
+      if (!name || !where) return;
       const list = loadBFilters();
-      list.push({ name, table: browse.table, where: browse.where || "" });
+      list.push({ name, table: browse.table, where });
       saveBFilters(list);
       closeModal();
       toast("Filter saved", "ok");
     });
+    const validate = () => { go.disabled = !(nameI.value.trim() && whereI.value.trim()); };
+    nameI.oninput = validate; whereI.oninput = validate; validate();
     openModal("Save filter", body, [mkBtn("Cancel", "ghost", closeModal), go]);
-    setTimeout(() => body.querySelector("#bfName").select(), 30);
+    setTimeout(() => nameI.focus(), 30);
   };
 
   async function reloadBrowse() {
@@ -2015,14 +2718,18 @@
     const bar = el("div", "result-bar");
     bar.innerHTML =
       `<span class="stat"><b>${esc(browse.table)}</b></span>` +
-      `<span class="stat">${r.total} rows · showing ${r.rows.length ? start : 0}–${end}</span>` +
+      `<span class="stat">${esc(I18N.t("{0} rows · showing {1}–{2}", r.total, r.rows.length ? start : 0, end))}</span>` +
       (r.has_rowid ? "" : `<span style="color:var(--yellow)">read-only (no rowid)</span>`) +
       `<span class="spacer"></span>`;
     bar.appendChild(mkBtn(ICON("plus") + "Add row", "ghost", () => addRowDialog()));
-    bar.appendChild(mkBtn(ICON("upload") + "Import CSV", "ghost", () => importDialog(browse.table)));
-    bar.appendChild(mkBtn(ICON("download") + "Export CSV", "ghost", () => {
-      triggerDownload(API.exportUrl(state.db, { table: browse.table, ...csvUrlOpts() }), browse.table + ".csv");
-    }));
+    bar.appendChild(mkBtn(ICON("upload") + "Import", "ghost", () => importDialog(browse.table)));
+    const bExp = mkBtn(ICON("download") + "Export", "ghost", () => {});
+    bExp.onclick = (e) => {
+      e.stopPropagation();
+      const r = e.currentTarget.getBoundingClientRect();
+      showCtxMenu(r.left, r.bottom + 4, exportItems(browse.table));
+    };
+    bar.appendChild(bExp);
     const pager = el("span", "pager");
     const prev = mkBtn(ICON("chevron-left") + "Prev", "ghost", () => {
       browse.offset = Math.max(0, browse.offset - browse.limit); reloadBrowse();
@@ -2058,9 +2765,11 @@
   }
 
   function buildEditableTable() {
+    gridSel = null;
     const r = browse.data;
     const editable = r.has_rowid;
     const table = el("table", "grid");
+    table.setAttribute("data-noi18n", ""); // cell data — never translate
     const thead = el("thead");
     const htr = el("tr");
     if (editable) htr.appendChild(el("th", "rowtools", ""));
@@ -2098,45 +2807,80 @@
         tools.appendChild(del);
         tr.appendChild(tools);
       }
-      tr.appendChild(el("td", "rownum", r.offset + i + 1));
-      r.columns.forEach((c) => {
+      const rnTd = el("td", "rownum", r.offset + i + 1); rnTd.dataset.r = i; tr.appendChild(rnTd);
+      r.columns.forEach((c, ci) => {
         const td = cellTd(row[c.name]);
+        td.dataset.r = i; td.dataset.c = ci;
         if (editable && !isBlob(row[c.name])) {
           td.classList.add("editable");
-          td.ondblclick = () => beginEdit(td, rowid, c.name, row[c.name]);
+          td.ondblclick = () => beginEdit(td, rowid, c.name, row[c.name], c.type);
         }
         td.oncontextmenu = (e) => cellContextMenu(e, { row, rowid, col: c.name, value: row[c.name], editable });
         tr.appendChild(td);
       });
-      tr.onclick = () => {
-        const obj = {};
-        r.columns.forEach((c) => (obj[c.name] = row[c.name]));
-        showRecord(obj, tr, browse.table);
-      };
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
+    table._cells = r.rows.map((row) => r.columns.map((c) => row[c.name]));
+    table._cols = r.columns.map((c) => c.name);
+    table._srcTable = browse.table;
+    enableRangeSelect(table);
     return table;
   }
 
-  function beginEdit(td, rowid, col, oldVal) {
+  // ---- typed cell editors (text / number / date / datetime / time / bool) ----
+  function colEditorKind(type, oldVal) {
+    const t = String(type || "").toUpperCase();
+    if (t) {
+      if (/BOOL/.test(t)) return "bool";
+      if (/DATETIME|TIMESTAMP/.test(t)) return "datetime";
+      if (/DATE/.test(t)) return "date";
+      if (/TIME/.test(t)) return "time";
+      if (/INT|REAL|FLOA|DOUB|NUM|DEC/.test(t)) return "number";
+      return "text";
+    }
+    return typeof oldVal === "number" ? "number" : "text";
+  }
+  const toDateVal = (v) => { const m = /^(\d{4}-\d{2}-\d{2})/.exec(v == null ? "" : String(v)); return m ? m[1] : ""; };
+  const toDateTimeVal = (v) => {
+    const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(v == null ? "" : String(v));
+    return m ? `${m[1]}T${m[2]}` : (toDateVal(v) ? toDateVal(v) + "T00:00" : "");
+  };
+  // returns { root, read(), focus(), live } — `live` editors (checkbox) commit
+  // on change and cancel on blur instead of committing on blur.
+  function makeCellInput(kind, oldVal) {
+    if (kind === "bool") {
+      const cb = el("input", "cell-edit cell-bool"); cb.type = "checkbox";
+      cb.checked = oldVal === 1 || oldVal === "1" || oldVal === true || String(oldVal).toLowerCase() === "true";
+      return { root: cb, read: () => (cb.checked ? "1" : "0"), focus: () => cb.focus(), live: true };
+    }
+    const input = el("input", "cell-edit");
+    if (kind === "number") { input.type = "text"; input.inputMode = "decimal"; input.value = oldVal == null ? "" : String(oldVal); }
+    else if (kind === "date") { input.type = "date"; input.value = toDateVal(oldVal); }
+    else if (kind === "datetime") { input.type = "datetime-local"; input.value = toDateTimeVal(oldVal); }
+    else if (kind === "time") { input.type = "time"; input.value = oldVal == null ? "" : String(oldVal).slice(0, 8); }
+    else { input.type = "text"; input.value = oldVal == null ? "" : String(oldVal); }
+    return {
+      root: input,
+      read: () => input.value === "" ? null : (kind === "datetime" ? input.value.replace("T", " ") : input.value),
+      focus: () => { input.focus(); try { input.select(); } catch (_) {} },
+      live: false,
+    };
+  }
+
+  function beginEdit(td, rowid, col, oldVal, type) {
     if (td.classList.contains("editing")) return;
     td.classList.add("editing");
-    const input = el("input", "cell-edit");
-    input.type = "text";
-    input.value = oldVal === null || oldVal === undefined ? "" : String(oldVal);
+    const ed = makeCellInput(colEditorKind(type, oldVal), oldVal);
     td.textContent = "";
-    td.appendChild(input);
-    input.focus();
-    input.select();
-
+    td.appendChild(ed.root);
+    ed.focus();
     let done = false;
     const commit = async () => {
       if (done) return;
       done = true;
-      const changes = {};
-      changes[col] = input.value === "" ? null : input.value;
-      const res = await API.updateRow(state.db, browse.table, { __rowid__: rowid }, changes);
+      const newVal = ed.read();
+      const res = await API.updateRow(state.db, browse.table, { __rowid__: rowid }, { [col]: newVal });
       if (res.error) toast(res.error, "err"); else toast("Saved", "ok");
       reloadBrowse();
     };
@@ -2144,18 +2888,19 @@
       if (done) return;
       done = true;
       td.classList.remove("editing");
-      td.textContent = oldVal === null ? "NULL" : String(oldVal);
+      td.textContent = oldVal === null ? S.nullDisplay : String(oldVal);
       if (oldVal === null) td.className = "null editable";
     };
-    input.onkeydown = (e) => {
+    ed.root.onkeydown = (e) => {
       if (e.key === "Enter") { e.preventDefault(); commit(); }
       else if (e.key === "Escape") { e.preventDefault(); cancel(); }
     };
-    input.onblur = commit;
+    if (ed.live) { ed.root.onchange = commit; ed.root.onblur = cancel; }
+    else ed.root.onblur = commit;
   }
 
   async function deleteBrowseRow(rowid) {
-    if (!confirm("Delete this row?")) return;
+    if (!(await askConfirm("Delete this row?", { title: "Delete row", confirmLabel: "Delete" }))) return;
     const res = await API.deleteRow(state.db, browse.table, { __rowid__: rowid });
     if (res.error) return toast(res.error, "err");
     toast("Row deleted", "ok");
@@ -2207,7 +2952,7 @@
       reloadBrowse();
       refreshSchema();
     });
-    openModal(`Add row to ${browse.table}`, body, [mkBtn("Cancel", "ghost", closeModal), save]);
+    openModal(I18N.t("Add row to {0}", browse.table), body, [mkBtn("Cancel", "ghost", closeModal), save]);
   }
 
   // ---- right-click cell context menu ----
@@ -2229,6 +2974,7 @@
           inp.focus();
           inp.setSelectionRange(inp.value.length, inp.value.length);
         } },
+      { icon: "chart", label: "Column stats", onClick: () => columnStatsBrowse(c.name) },
       { icon: "copy", label: "Copy column name", onClick: async () => {
           try { await navigator.clipboard.writeText(c.name); toast("Copied", "ok"); }
           catch (_) { toast("Clipboard blocked by browser", "err"); }
@@ -2238,7 +2984,7 @@
     const fk = browse.fks.find((f) => f.from === c.name);
     if (fk) {
       items.push({ sep: true });
-      items.push({ icon: "arrow-right", label: `Go to ${fk.table}`,
+      items.push({ icon: "arrow-right", label: I18N.t("Go to {0}", fk.table),
         onClick: () => openBrowse(fk.table) });
     }
     showCtxMenu(e.clientX, e.clientY, items);
@@ -2255,7 +3001,7 @@
         : "'" + String(ctx.value).replace(/'/g, "''") + "'";
       items.push({
         icon: "arrow-right",
-        label: `Go to ${fk.table}.${fk.to} = ${String(ctx.value).slice(0, 20)}`,
+        label: I18N.t("Go to {0}.{1} = {2}", fk.table, fk.to, String(ctx.value).slice(0, 20)),
         onClick: () => openBrowse(fk.table, `${quoteIfNeeded(fk.to)} = ${lit}`),
       });
       items.push({ sep: true });
@@ -2290,41 +3036,71 @@
          <label>Target table</label>
          <input type="text" id="impTable" value="${esc(presetTable || "")}" placeholder="table_name" />
        </div>
-       <div class="checkrow"><input type="checkbox" id="impHeader" checked /> First row is a header</div>
-       <div class="checkrow"><input type="checkbox" id="impCreate" /> Create table if it doesn't exist (all TEXT)</div>
-       <div class="checkrow"><input type="checkbox" id="impReplace" /> Replace existing rows first</div>
+       <div class="checkrow"><input type="checkbox" id="impHeader" checked /> First row is a header (CSV / Excel)</div>
+       <div class="checkrow"><input type="checkbox" id="impCreate" /> Create table if it doesn't exist</div>
+       <div class="checkrow"><input type="checkbox" id="impReplace" /> Replace rows with a matching primary key (otherwise duplicates are rejected)</div>
        <div class="field">
-         <label>Paste CSV, or choose a file</label>
-         <input type="file" id="impFile" accept=".csv,text/csv" />
-         <textarea id="impText" placeholder="id,name,age&#10;1,Alice,30"></textarea>
+         <label>Choose a CSV / JSON / Excel file, or paste CSV / JSON below</label>
+         <input type="file" id="impFile" accept=".csv,.tsv,.json,.xlsx,text/csv,application/json" />
+         <textarea id="impText" placeholder="id,name,age&#10;1,Alice,30&#10;&#10;— or —&#10;[{&quot;id&quot;: 1, &quot;name&quot;: &quot;Alice&quot;}]"></textarea>
+         <div class="hint" id="impNote"></div>
        </div>`;
     const fileInput = body.querySelector("#impFile");
-    fileInput.onchange = () => {
+    const textArea = body.querySelector("#impText");
+    const note = body.querySelector("#impNote");
+    let loaded = { fmt: "csv", rows: null };
+    fileInput.onchange = async () => {
       const f = fileInput.files[0];
       if (!f) return;
+      note.textContent = "";
+      const ext = (f.name.split(".").pop() || "").toLowerCase();
+      if (ext === "xlsx") {
+        try {
+          const parsed = await XLSXMini.parse(await f.arrayBuffer());
+          const sh = parsed.sheets[0];
+          if (!sh || !sh.rows.length) return toast("No rows found in the spreadsheet", "err");
+          loaded = { fmt: "xlsx", rows: sh.rows };
+          textArea.value = ""; textArea.disabled = true;
+          note.textContent = `Excel loaded — sheet “${sh.name}”, ${sh.rows.length} row(s) × ${sh.rows[0].length} column(s).`;
+        } catch (err) { toast("Couldn't read .xlsx: " + err.message, "err"); }
+        return;
+      }
+      textArea.disabled = false;
+      loaded = { fmt: ext === "json" ? "json" : "csv", rows: null };
       const reader = new FileReader();
-      reader.onload = () => (body.querySelector("#impText").value = reader.result);
+      reader.onload = () => { textArea.value = reader.result; };
       reader.readAsText(f);
     };
     const run = mkBtn("Import", "primary", async () => {
-      const payload = {
-        db: state.db,
-        table: body.querySelector("#impTable").value.trim(),
-        csv: body.querySelector("#impText").value,
-        has_header: body.querySelector("#impHeader").checked,
-        create_table: body.querySelector("#impCreate").checked,
-        mode: body.querySelector("#impReplace").checked ? "replace" : "append",
-      };
-      if (!payload.table) return toast("Target table required", "err");
-      if (!payload.csv.trim()) return toast("No CSV provided", "err");
-      const res = await API.importCsv(payload);
+      const table = body.querySelector("#impTable").value.trim();
+      if (!table) return toast("Target table required", "err");
+      if (S.readOnly) return toast("Read-only mode is on (see Settings).", "err");
+      const header = body.querySelector("#impHeader").checked;
+      const create = body.querySelector("#impCreate").checked;
+      const mode = body.querySelector("#impReplace").checked ? "upsert" : "append";
+      let res;
+      if (loaded.fmt === "xlsx") {
+        const rows = loaded.rows;
+        const keys = (header ? rows[0] : rows[0].map(() => null))
+          .map((h, i) => (h == null || h === "" ? `col${i + 1}` : String(h)));
+        const data = (header ? rows.slice(1) : rows).map((r) => {
+          const o = {}; keys.forEach((k, i) => (o[k] = r[i] === undefined ? null : r[i])); return o;
+        });
+        res = await API.importJson({ db: state.db, table, json: JSON.stringify(data), create, mode, backup: S.autoBackup });
+      } else {
+        const text = textArea.value;
+        if (!text.trim()) return toast("Nothing to import", "err");
+        res = (loaded.fmt === "json" || /^\s*[[{]/.test(text))
+          ? await API.importJson({ db: state.db, table, json: text, create, mode, backup: S.autoBackup })
+          : await API.importCsv({ db: state.db, table, csv: text, has_header: header, create_table: create, mode });
+      }
       if (res.error) return toast(res.error + (res.explanation ? " — " + res.explanation : ""), "err");
       closeModal();
-      toast(`Imported ${res.inserted} rows into ${res.table}`, "ok");
+      toast(I18N.t("Imported {0} row(s) into {1}", res.inserted, res.table), "ok");
       await refreshSchema();
       if (!$("#browseView").hidden && browse.table === res.table) { browse.offset = 0; reloadBrowse(); }
     });
-    openModal("Import CSV", body, [mkBtn("Cancel", "ghost", closeModal), run]);
+    openModal("Import data", body, [mkBtn("Cancel", "ghost", closeModal), run]);
   }
 
   // ============================================================ RAIL & SIDEBAR
@@ -2394,20 +3170,18 @@
   new MutationObserver(() => labelButtons(document))
     .observe(document.body, { childList: true, subtree: true });
 
-  // arrow-key navigation in data grids (focus a grid area, then ↑/↓ select)
+  // arrow-key navigation in data grids: ↑/↓ moves the selection's anchor row
   document.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
-    const grid = document.activeElement.closest?.(".grid-wrap") ||
-      (!$("#browseView").hidden ? $("#browseMain .grid-wrap") : $("#resultsBody .grid-wrap"));
-    if (!grid) return;
-    const rows = $$("tbody tr", grid);
-    if (!rows.length) return;
+    if (!gridSel || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+    const t = gridSel.table, maxR = (t._cells ? t._cells.length : 0) - 1;
+    if (maxR < 0) return;
     e.preventDefault();
-    let i = rows.findIndex((r) => r.classList.contains("row-selected"));
-    i = e.key === "ArrowDown" ? Math.min(i + 1, rows.length - 1) : Math.max(i - 1, 0);
-    rows[i].click();
-    rows[i].scrollIntoView({ block: "nearest" });
+    const nr = e.key === "ArrowDown" ? Math.min(gridSel.r0 + 1, maxR) : Math.max(gridSel.r0 - 1, 0);
+    gridSel.r0 = nr; gridSel.r1 = nr;
+    paintGridSel(); recordFromGridSel();
+    const cell = t.querySelector(`td[data-r="${nr}"]`);
+    if (cell) cell.scrollIntoView({ block: "nearest" });
   });
 
   // ============================================================ VIEW UTILITIES
@@ -2443,6 +3217,7 @@
     const p = $("#jsonPanel");
     p.hidden = force !== undefined ? !force : !p.hidden;
     $("#btnToggleJson").classList.toggle("active", !p.hidden);
+    if (!p.hidden) recordFromGridSel(); // populate from the current selection when opened
   }
   $("#btnToggleJson").onclick = () => toggleJsonPanel();
   $("#jsonClose").onclick = () => toggleJsonPanel(false);
@@ -2489,14 +3264,9 @@
     return c.dia;
   }
 
-  function showRecord(obj, tr, table) {
+  function showRecord(obj, table) {
     record.obj = obj;
     record.table = table || null;
-    if (tr) {
-      [...tr.parentElement.children].forEach((s) => s.classList.remove("row-selected"));
-      tr.classList.add("row-selected");
-    }
-    toggleJsonPanel(true);
     renderRecord();
   }
 
@@ -2504,7 +3274,7 @@
     const body = $("#recBody"), title = $("#recTitle");
     $$("#recModes .rec-mode").forEach((b) => b.classList.toggle("active", b.dataset.recmode === record.mode));
     if (!record.obj) {
-      body.innerHTML = `<div class="rec-empty">Click a row in a result grid or the Browse view to inspect it and follow its foreign-key relations.</div>`;
+      body.innerHTML = `<div class="rec-empty">${esc(I18N.t("Click a row in a result grid or the Browse view to inspect it and follow its foreign-key relations."))}</div>`;
       title.textContent = "Row";
       return;
     }
@@ -2627,7 +3397,7 @@
     d.onclick = () => {
       const o = {};
       names.forEach((c) => (o[c] = rowObj[c]));
-      showRecord(o, null, table);
+      showRecord(o, table);
     };
     return d;
   }
@@ -2661,47 +3431,6 @@
       refreshSchema();
     });
     openModal("Import SQL", body, [mkBtn("Cancel", "ghost", closeModal), run]);
-  }
-
-  function importJsonDialog() {
-    const body = el("div");
-    body.innerHTML =
-      `<div class="field">
-         <label>JSON file (or paste below) — an array of objects</label>
-         <input type="file" id="jsonFile" accept=".json,application/json" />
-         <textarea id="jsonText" placeholder='[{"name": "Ada", "age": 36}, {"name": "Bob"}]'></textarea>
-       </div>
-       <div class="field"><label>Target table</label>
-         <input type="text" id="jsonTable" placeholder="people" /></div>
-       <label class="checkrow"><input type="checkbox" id="jsonCreate" checked /> Create the table if it doesn't exist (column types inferred)</label>
-       <label class="checkrow"><input type="checkbox" id="jsonReplace" /> Replace existing rows (instead of appending)</label>
-       <div class="field"><div class="hint">Nested objects/arrays are stored as JSON text. Keys that don't match a column are skipped.</div></div>`;
-    const fileInput = body.querySelector("#jsonFile");
-    fileInput.onchange = () => {
-      const f = fileInput.files[0];
-      if (!f) return;
-      const reader = new FileReader();
-      reader.onload = () => (body.querySelector("#jsonText").value = reader.result);
-      reader.readAsText(f);
-      if (!body.querySelector("#jsonTable").value)
-        body.querySelector("#jsonTable").value = f.name.replace(/\.json$/i, "").replace(/[^\w]/g, "_");
-    };
-    const run = mkBtn("Import", "primary", async () => {
-      const res = await API.importJson({
-        db: state.db,
-        table: body.querySelector("#jsonTable").value.trim(),
-        json: body.querySelector("#jsonText").value,
-        create: body.querySelector("#jsonCreate").checked,
-        mode: body.querySelector("#jsonReplace").checked ? "replace" : "append",
-        backup: S.autoBackup,
-      });
-      if (res.error) return toast(res.error + (res.explanation ? " — " + res.explanation : ""), "err");
-      closeModal();
-      toast(`Imported ${res.inserted} rows into ${res.table}`, "ok");
-      await refreshSchema();
-      if (!$("#browseView").hidden && browse.table === res.table) reloadBrowse();
-    });
-    openModal("Import JSON", body, [mkBtn("Cancel", "ghost", closeModal), run]);
   }
 
   // ---- Database settings (PRAGMA) ----
@@ -2843,7 +3572,7 @@
         alias: body.querySelector("#atAlias").value.trim(),
       });
       if (res.error) return toast(res.error, "err");
-      toast(`Attached as ${res.alias}`, "ok");
+      toast(I18N.t("Attached as {0}", res.alias), "ok");
       body.querySelector("#atAlias").value = "";
       refreshList();
     });
@@ -2883,7 +3612,7 @@
           `<span class="set-label"><span style="font-family:var(--mono)">${esc(b.name)}</span>
            <span style="color:var(--faint)"> · ${(b.size / 1024).toFixed(1)} KB · ${esc(b.mtime.replace("T", " "))}</span></span>`;
         row.appendChild(mkBtn("Restore", "ghost", async () => {
-          if (!confirm(`Replace ${state.db} with this backup?\n(The current state is backed up first.)`)) return;
+          if (!(await askConfirm(I18N.t("Replace {0} with this backup?\n(The current state is backed up first.)", state.db), { title: "Restore backup", confirmLabel: "Restore" }))) return;
           const res = await API.restoreBackup(state.db, b.name);
           if (res.error) return toast(res.error, "err");
           toast("Backup restored", "ok");
@@ -2901,7 +3630,7 @@
           "No backups yet. Enable auto-backup in Settings, or they appear after destructive operations."));
     }
     refreshBackups();
-    openModal(`Database tools — ${state.db}`, body, [mkBtn("Close", "primary", closeModal)]);
+    openModal(I18N.t("Database tools — {0}", state.db), body, [mkBtn("Close", "primary", closeModal)]);
   }
 
   // ============================================================ COMMAND PALETTE
@@ -2927,7 +3656,7 @@
      ["Database tools", dbToolsDialog],
      ["Database settings (PRAGMA)", pragmaDialog],
      ["Search database", searchDialog],
-     ["Import JSON", importJsonDialog],
+     ["Import data (CSV / JSON / Excel)", () => importDialog(browse.table || "")],
      ["Explain query plan", explainPlan],
      ["Find & replace", openFindBar],
      ["Toggle privacy mode", () => document.body.classList.toggle("privacy")],
@@ -2973,8 +3702,7 @@
       { icon: "terminal", label: "New query tab", onClick: addQueryTab },
       { icon: "save", label: "Save as snippet…", keys: "Ctrl S", onClick: () => snippetDialog(null) },
       { sep: true },
-      { icon: "upload", label: "Import CSV…", onClick: () => importDialog(browse.table || "") },
-      { icon: "upload", label: "Import JSON…", onClick: importJsonDialog },
+      { icon: "upload", label: "Import data (CSV / JSON / Excel)…", onClick: () => importDialog(browse.table || "") },
       { icon: "upload", label: "Import SQL file…", onClick: importSqlDialog },
       { icon: "download", label: "Export database as SQL", onClick: () => {
           triggerDownload(API.dumpUrl(state.db), state.db.replace(/\.db$/, "") + ".sql");
@@ -3017,8 +3745,10 @@
           const item = (t) => ({
             label: t.name, checked: state.theme === t.id, onClick: () => applyTheme(t.id),
           });
-          // dark family / light family, separated
+          // System (follows the OS), then dark family / light family, separated
           return [
+            { label: "System", checked: state.theme === "system", onClick: () => applyTheme("system") },
+            { sep: true },
             ...THEMES.filter((t) => !LIGHT_THEMES.includes(t.id)).map(item),
             { sep: true },
             ...THEMES.filter((t) => LIGHT_THEMES.includes(t.id)).map(item),
@@ -3031,10 +3761,11 @@
         onClick: () => document.body.classList.toggle("privacy") },
     ],
     help: () => [
-      { label: "Keyboard shortcuts", onClick: shortcutsModal },
+      { icon: "play", label: "Take the tour", onClick: startTour },
+      { icon: "keyboard", label: "Keyboard shortcuts", onClick: shortcutsModal },
       { icon: "book", label: "SQL syntax reference", onClick: () => railSelect("syntax") },
       { sep: true },
-      { label: "About SequenceLab", onClick: aboutModal },
+      { icon: "info", label: "About SequenceLab", onClick: aboutModal },
     ],
   };
   $$(".menu-item").forEach((btn) => {
@@ -3054,8 +3785,8 @@
     const body = el("div");
     body.innerHTML =
       `<p style="margin:0 0 10px;font-family:var(--display);font-size:18px">Se<span class="brand-accent">Q</span>uenceLab</p>
-       <p style="margin:0 0 8px;color:var(--muted);line-height:1.6">A local SQLite workbench. Backend on 127.0.0.1, databases as real .db files, everything fully offline — no cloud, no account, no telemetry.</p>
-       <p style="margin:0;color:var(--faint);font-size:12px">Frontend: vanilla HTML/CSS/JS · Backend: Flask + sqlite3</p>`;
+       <p style="margin:0 0 8px;color:var(--muted);line-height:1.6">A local SQLite workbench. Databases as real .db files, everything fully offline — no cloud, no account, no telemetry.</p>
+       <p style="margin:0;color:var(--faint);font-size:12px">Frontend: vanilla HTML/CSS/JS · Backend: sql.js + sqlite3</p>`;
     openModal("About", body, [mkBtn("Close", "primary", closeModal)]);
   }
 
@@ -3072,7 +3803,7 @@
            <span class="history-status ${h.status}">${ICON(h.status === "ok" ? "check" : "x")}</span>
            <span>${esc((h.ran_at || "").replace("T", " "))}</span>
            <span>${h.duration_ms != null ? h.duration_ms + " ms" : ""}</span>
-           ${h.row_count != null ? `<span>${h.row_count} rows</span>` : ""}
+           ${h.row_count != null ? `<span>${esc(I18N.t("{0} rows", h.row_count))}</span>` : ""}
          </div>`;
       item.title = h.sql;
       item.onclick = () => { editor.setValue(h.sql); editor.focus(); };
@@ -3080,11 +3811,11 @@
     });
     if (!(res.history || []).length)
       list.appendChild(el("div", "msg-block",
-        `<span style="color:var(--text-faint)">No queries yet for this database.</span>`));
+        `<span style="color:var(--text-faint)">${esc(I18N.t("No queries yet for this database."))}</span>`));
   }
 
   $("#btnClearHistory").onclick = async () => {
-    if (!confirm("Clear all query history?")) return;
+    if (!(await askConfirm("Clear all query history?", { title: "Clear history", confirmLabel: "Clear all" }))) return;
     await API.clearHistory();
     loadHistory();
   };
@@ -3111,7 +3842,7 @@
       };
       item.querySelector('[data-act="edit"]').onclick = () => snippetDialog(s);
       item.querySelector('[data-act="del"]').onclick = async () => {
-        if (!confirm(`Delete snippet "${s.title}"?`)) return;
+        if (!(await askConfirm(I18N.t("Delete snippet \"{0}\"?", s.title), { title: "Delete snippet", confirmLabel: "Delete" }))) return;
         await API.deleteSnippet(s.id);
         loadSnippets();
       };
@@ -3119,8 +3850,7 @@
     });
     if (!(res.snippets || []).length)
       list.appendChild(el("div", "msg-block",
-        `<span style="color:var(--text-faint)">No saved snippets.<br>Write SQL, then click ＋.<br><br>` +
-        `Tip: <code>\${name}</code> placeholders prompt on insert, <code>\${cursor}</code> sets the caret.</span>`));
+        `<span style="color:var(--text-faint)">${I18N.t("No saved snippets.<br>Write SQL, then click ＋.<br><br>Tip: <code>${name}</code> placeholders prompt on insert, <code>${cursor}</code> sets the caret.")}</span>`));
     if (editor) editor.setSnippets(state.snippetCache.map((s) => ({ name: s.title, sql: s.sql })));
   }
 
@@ -3215,7 +3945,7 @@
   window.SLApp = {
     db: () => state.db,
     toast,
-    openModal, closeModal, mkBtn, mkSelect, el, esc, showCtxMenu,
+    openModal, closeModal, mkBtn, mkSelect, el, esc, showCtxMenu, askConfirm,
     onSchemaChanged: async () => { await refreshSchema(); },
     autoBackup: () => S.autoBackup,
     runSelect: (sql) => { setView("editor"); editor.setValue(sql); runQuery(); },
@@ -3228,6 +3958,250 @@
     },
   };
 
+  // ============================================================ ONBOARDING
+  // First-run: a 3-page wizard (language → theme → tutorial), then an optional
+  // guided spotlight tour through the side rail's tabs and sub-tabs.
+  const ONBOARD_KEY = "sl.onboarded";
+
+  function backArrow(onClick) {
+    const b = el("button", "btn icon ob-back", ICON("arrow-left") || ICON("chevron-left"));
+    b.title = I18N.t("Back");
+    b.onclick = onClick;
+    return b;
+  }
+
+  // --- the wizard --------------------------------------------------------
+  function startWizard() {
+    finishOnboarding();   // one-time auto-show; replay later via Help → Take the tour
+    wizardLang();
+  }
+
+  function wizardLang() {
+    const body = el("div", "ob-page");
+    body.innerHTML =
+      `<div class="ob-welcome">
+         <div class="ob-logo">Se<span class="brand-accent">Q</span>uenceLab</div>
+         <p class="ob-lead">Welcome! Choose your language to begin.</p>
+         <p class="ob-lead ob-lead-alt">Bienvenue ! Choisissez votre langue pour commencer.</p>
+       </div>`;
+    const row = el("div", "ob-langrow");
+    row.appendChild(mkSelect(
+      I18N.langs.map((l) => [l.code, l.label]), I18N.lang,
+      (v) => I18N.set(v), "set-select ob-langsel"));
+    body.appendChild(row);
+    const next = mkBtn(I18N.t("Next") + (ICON("arrow-right") || ""), "primary", wizardTheme);
+    openModal("SequenceLab", body, [next]);
+  }
+
+  function wizardTheme() {
+    const body = el("div", "ob-page");
+    const head = el("div", "ob-pagehead");
+    head.appendChild(backArrow(wizardLang));
+    head.appendChild(el("div", "ob-pagetitle", I18N.t("Pick a theme")));
+    body.appendChild(head);
+    body.appendChild(el("p", "ob-lead", I18N.t("You can change this any time in Settings.")));
+    body.appendChild(themePickerNode());
+    const next = mkBtn(I18N.t("Next") + (ICON("arrow-right") || ""), "primary", wizardTutorial);
+    openModal("SequenceLab", body, [next]);
+  }
+
+  function wizardTutorial() {
+    const body = el("div", "ob-page");
+    const head = el("div", "ob-pagehead");
+    head.appendChild(backArrow(wizardTheme));
+    head.appendChild(el("div", "ob-pagetitle", I18N.t("Have a look around")));
+    body.appendChild(head);
+    body.appendChild(el("p", "ob-lead",
+      I18N.t("Take a quick guided tour of every panel, or jump straight in — you can replay the tour any time from the Help menu.")));
+    const skip = mkBtn(I18N.t("Skip"), "ghost", () => { finishOnboarding(); closeModal(); });
+    const go = mkBtn(I18N.t("Take the tour"), "primary", () => { finishOnboarding(); closeModal(); startTour(); });
+    openModal("SequenceLab", body, [skip, go]);
+  }
+
+  // a compact theme picker (System + dark + light) for the wizard
+  function themePickerNode() {
+    const wrap = el("div", "ob-themes");
+    const card = (id, name, sub, dot) => {
+      const c = el("button", "theme-card" + (state.theme === id ? " active" : ""));
+      c.innerHTML =
+        `<span class="theme-dot" style="background:${dot}"></span>` +
+        `<span class="theme-name">${esc(I18N.t(name))}</span><span class="theme-sub">${esc(I18N.t(sub))}</span>`;
+      c.onclick = () => {
+        applyTheme(id);
+        $$(".theme-card", wrap).forEach((x) => x.classList.remove("active"));
+        c.classList.add("active");
+      };
+      return c;
+    };
+    const grid = el("div", "theme-grid");
+    grid.appendChild(card("system", "System", "follows your OS",
+      "linear-gradient(135deg,#7b6cf6 0 50%,#5b4ee0 50% 100%)"));
+    THEMES.forEach((t) => grid.appendChild(card(t.id, t.name, t.sub, t.dot)));
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  function finishOnboarding() { localStorage.setItem(ONBOARD_KEY, "1"); }
+
+  // --- debug / reset helpers --------------------------------------------
+  function wipeLocalState() {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith("sl."))
+      .forEach((k) => localStorage.removeItem(k));
+  }
+  async function wipeCachesAndSW() {
+    try {
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch (_) {}
+    try {
+      if (navigator.serviceWorker) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+    } catch (_) {}
+  }
+
+  // --- the spotlight tour ------------------------------------------------
+  // each step highlights a target and explains it; `before` puts the app in
+  // the right state (switches rail tab) so the panel is actually visible.
+  function tourSteps() {
+    return [
+      { sel: ".rail", before: () => railSelect("editor"),
+        title: "The side rail",
+        body: "These icons switch between the three workspaces — Editor, Browse and Diagram — and their sub-panels. Let's walk through each." },
+      { sel: '.rail-btn[data-rail="editor"]', before: () => railSelect("editor"),
+        title: "Editor",
+        body: "Write and run SQL. You get syntax highlighting, autocomplete, keyword auto-capitalize, one-click formatting, and multiple draggable query tabs." },
+      { sel: "#btnRun", before: () => railSelect("editor"),
+        title: "Run",
+        body: "Run everything, just the selection, or only the statement under the caret — the ▾ menu also explains the query plan. Shortcut: Ctrl+Enter." },
+      { sel: '.rail-btn[data-rail="files"]', before: () => railSelect("files"),
+        title: "Files",
+        body: "Your databases, stored as real .db files in the browser. Create, open/import a .db, or live-link a file on disk so edits save straight back." },
+      { sel: '.rail-btn[data-rail="snippets"]', before: () => railSelect("snippets"),
+        title: "Snippets",
+        body: "Save reusable SQL. Use ${name} placeholders that prompt on insert and ${cursor} to drop the caret where you need it." },
+      { sel: '.rail-btn[data-rail="history"]', before: () => railSelect("history"),
+        title: "History",
+        body: "Every query you run is logged with its status and timing — click one to load it back into the editor." },
+      { sel: '.rail-btn[data-rail="syntax"]', before: () => railSelect("syntax"),
+        title: "Syntax reference",
+        body: "A clickable cheat-sheet for every SQL statement plus a grouped function reference. Click an example to drop it into the editor." },
+      { sel: '.rail-btn[data-rail="browse"]', before: () => railSelect("browse"),
+        title: "Browse",
+        body: "A spreadsheet-style view of any table: edit cells inline, sort, per-column filters, range-select & copy, add/clone/delete rows, and export." },
+      { sel: '.rail-btn[data-rail="bfilters"]', before: () => railSelect("bfilters"),
+        title: "Saved filters",
+        body: "Keep table + WHERE filters you use often and reapply them in one click." },
+      { sel: '.rail-btn[data-rail="diagram"]', before: () => railSelect("diagram"),
+        title: "Diagram",
+        body: "An ER diagram of your schema: drag the cards, draw a foreign key by dragging one column onto another, auto-layout, and export to PNG or SVG." },
+      { sel: '.rail-btn[data-rail="dlayouts"]', before: () => railSelect("dlayouts"),
+        title: "Layouts",
+        body: "Save several named arrangements of the diagram and switch between them." },
+      { sel: '.rail-btn[data-rail="dnotes"]', before: () => railSelect("dnotes"),
+        title: "Legend & notes",
+        body: "Drop sticky notes on the canvas and tag tables with colors, with a legend explaining what each color means." },
+      { sel: "#btnSettings", before: () => {},
+        title: "Settings",
+        body: "Language, theme, editor behavior, safety (read-only, confirm destructive, preview writes), display and data options all live here." },
+    ];
+  }
+
+  let tour = null;
+  function startTour() {
+    const steps = tourSteps();
+    const overlay = el("div", "tour-overlay");
+    const spot = el("div", "tour-spot");
+    const pop = el("div", "tour-pop");
+    overlay.appendChild(spot);
+    overlay.appendChild(pop);
+    document.body.appendChild(overlay);
+    tour = { steps, i: 0, overlay, spot, pop };
+    const onResize = () => positionTour();
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); endTour(); } };
+    tour.onResize = onResize;
+    tour.onKey = onKey;
+    window.addEventListener("resize", onResize);
+    document.addEventListener("keydown", onKey, true);
+    showStep(0);
+  }
+
+  function endTour() {
+    if (!tour) return;
+    window.removeEventListener("resize", tour.onResize);
+    document.removeEventListener("keydown", tour.onKey, true);
+    tour.overlay.remove();
+    tour = null;
+  }
+
+  function showStep(i) {
+    if (!tour) return;
+    if (i < 0 || i >= tour.steps.length) return endTour();
+    tour.i = i;
+    const step = tour.steps[i];
+    try { step.before && step.before(); } catch (_) {}
+    // let the view settle (rail switch may change layout) before measuring
+    requestAnimationFrame(() => requestAnimationFrame(() => renderStep()));
+  }
+
+  function renderStep() {
+    if (!tour) return;
+    const step = tour.steps[tour.i];
+    const { pop } = tour;
+    pop.innerHTML =
+      `<div class="tour-step">${tour.i + 1} / ${tour.steps.length}</div>` +
+      `<div class="tour-title">${esc(I18N.t(step.title))}</div>` +
+      `<div class="tour-body">${esc(I18N.t(step.body))}</div>`;
+    const foot = el("div", "tour-foot");
+    foot.appendChild(mkBtn(I18N.t("Skip tour"), "ghost tour-skip", endTour));
+    const spacer = el("span", "tour-spacer"); foot.appendChild(spacer);
+    if (tour.i > 0) foot.appendChild(mkBtn(I18N.t("Back"), "ghost", () => showStep(tour.i - 1)));
+    const last = tour.i === tour.steps.length - 1;
+    foot.appendChild(mkBtn(last ? I18N.t("Done") : I18N.t("Next"), "primary",
+      () => (last ? endTour() : showStep(tour.i + 1))));
+    pop.appendChild(foot);
+    positionTour();
+  }
+
+  function positionTour() {
+    if (!tour) return;
+    const step = tour.steps[tour.i];
+    const target = $(step.sel);
+    const { spot, pop } = tour;
+    if (!target) { spot.style.display = "none"; }
+    else {
+      spot.style.display = "";
+      const r = target.getBoundingClientRect();
+      const pad = 6;
+      spot.style.left = (r.left - pad) + "px";
+      spot.style.top = (r.top - pad) + "px";
+      spot.style.width = (r.width + pad * 2) + "px";
+      spot.style.height = (r.height + pad * 2) + "px";
+    }
+    // place the callout: prefer to the right of the target, else below, else centered
+    const pr = pop.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let left, top;
+    if (target) {
+      const r = target.getBoundingClientRect();
+      if (r.right + 16 + pr.width <= vw) {            // right
+        left = r.right + 16; top = Math.min(Math.max(8, r.top), vh - pr.height - 8);
+      } else if (r.bottom + 16 + pr.height <= vh) {   // below
+        top = r.bottom + 16; left = Math.min(Math.max(8, r.left), vw - pr.width - 8);
+      } else {                                        // left of target
+        left = Math.max(8, r.left - 16 - pr.width); top = Math.min(Math.max(8, r.top), vh - pr.height - 8);
+      }
+    } else {
+      left = (vw - pr.width) / 2; top = (vh - pr.height) / 2;
+    }
+    pop.style.left = Math.round(left) + "px";
+    pop.style.top = Math.round(top) + "px";
+  }
+
   // ============================================================ BOOT
   async function boot() {
     applyTheme(state.theme);
@@ -3235,6 +4209,8 @@
     if (editorFs !== 13.5) document.documentElement.style.setProperty("--editor-fs", editorFs + "px");
     applySettings();
     initEditor();
+    // editor lives in an i18n-excluded zone, so set its placeholder explicitly
+    $("#sqlInput").placeholder = I18N.t("-- Write SQL here.  Ctrl+Enter to run.");
     editor.setValue(activeQueryTab().sql || "");
     renderQueryTabs();
     renderActiveResult(); // shows the shortcuts help panel
@@ -3246,6 +4222,25 @@
       if (h && h.sqlite)
         $("#sqliteVer").textContent = `SQLite ${h.sqlite} · in-browser (sql.js) · offline`;
     }).catch(() => {});
+    // first run: show the welcome wizard once
+    if (!localStorage.getItem(ONBOARD_KEY)) setTimeout(startWizard, 400);
   }
+  // re-render content the DOM pass can't reach (source-wrapped strings in
+  // excluded zones + tab titles stored as concrete strings) on a live switch.
+  I18N.onChange(() => {
+    const sqlInput = $("#sqlInput");
+    if (sqlInput) sqlInput.placeholder = I18N.t("-- Write SQL here.  Ctrl+Enter to run.");
+    renderQueryTabs();
+    renderTabs();
+    renderActiveResult();
+    renderBrowseFilters();
+    if (!$("#browseView").hidden && browse.table) renderBrowseMain();
+    renderRecord();
+    if (state.tables) renderSchemaTree(state.tables);
+    loadSnippets();
+    loadHistory();
+    if (window.ERD && ERD.relocalize) ERD.relocalize();
+  });
+
   boot();
 })();

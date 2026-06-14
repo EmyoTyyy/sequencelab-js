@@ -419,9 +419,9 @@ window.ERD = (function () {
       const tTbl = st.tables.find((x) => x.name === target.table);
       if (tTbl && tTbl.type === "view")
         return SLApp.toast("Can't reference a view.", "err");
-      if (!confirm(
+      if (!(await SLApp.askConfirm(
         `Create foreign key?\n\n${table}.${col}  →  ${target.table}.${target.col}\n\n` +
-        `This rebuilds ${table} (rows, keys and indexes are preserved).`)) return;
+        `This rebuilds ${table} (rows, keys and indexes are preserved).`, { title: "Create foreign key", confirmLabel: "Create" }))) return;
       const res = await API.addFk({
         db: st.db, table, column: col,
         ref_table: target.table, ref_column: target.col,
@@ -541,52 +541,74 @@ window.ERD = (function () {
   // ----------------------------------------------------------------- saved layouts
   function saveLayoutAs() {
     if (!st.tables.length) return SLApp.toast("Nothing to save", "err");
-    const name = prompt("Layout name", "Layout " + (Object.keys(st.layouts).length + 1));
-    if (!name || !name.trim()) return;
-    const key = name.trim();
-    if (st.layouts[key] && !confirm(`Overwrite layout "${key}"?`)) return;
-    st.layouts[key] = JSON.parse(JSON.stringify(st.pos));
-    save();
-    renderLayoutList();
-    SLApp.toast("Layout saved", "ok");
+    const suggested = "Layout " + (Object.keys(st.layouts).length + 1);
+    const body = SLApp.el("div");
+    body.innerHTML =
+      `<div class="field"><label>Layout name</label>
+         <input id="layName" type="text" placeholder="${suggested}" /></div>
+       <div class="hint">${esc(I18N.t("{0} tables will be saved at their current positions.", st.tables.length))}</div>`;
+    const input = body.querySelector("#layName");
+    input.value = suggested;
+    const go = SLApp.mkBtn("Save", "primary", async () => {
+      const key = input.value.trim();
+      if (!key) return SLApp.toast("Layout name required", "err");
+      if (st.layouts[key] && !(await SLApp.askConfirm(I18N.t("Overwrite layout \"{0}\"?", key), { title: "Overwrite layout", confirmLabel: "Overwrite" }))) return;
+      st.layouts[key] = JSON.parse(JSON.stringify(st.pos));
+      save();
+      renderLayoutList();
+      SLApp.closeModal();
+      SLApp.toast("Layout saved", "ok");
+    });
+    SLApp.openModal("Save layout", body, [SLApp.mkBtn("Cancel", "ghost", SLApp.closeModal), go]);
+    setTimeout(() => { input.focus(); input.select(); input.onkeydown = (ev) => { if (ev.key === "Enter") go.click(); }; }, 30);
   }
   function renderLayoutList() {
     dom.layoutList.innerHTML = "";
     const names = Object.keys(st.layouts);
     if (!names.length) {
       dom.layoutList.appendChild(h("div", "bf-empty",
-        "No saved layouts yet.<br>Arrange the tables, then press ＋ above to keep the arrangement under a name."));
+        I18N.t("No saved layouts yet.<br>Arrange the tables, then press ＋ above to keep the arrangement under a name.")));
       return;
     }
     names.forEach((name) => {
-      const row = h("div", "bf-row");
-      row.innerHTML =
+      const row = h("div", "bf-row lay-row");
+      const main = h("div", "lay-main",
         `<span class="bf-name">${esc(name)}</span>` +
-        `<span class="bf-meta">${Object.keys(st.layouts[name]).length} tables placed</span>`;
-      row.onclick = () => {
+        `<span class="bf-meta">${esc(I18N.t("{0} tables placed", Object.keys(st.layouts[name]).length))}</span>`);
+      const apply = () => {
         st.pos = { ...st.pos, ...JSON.parse(JSON.stringify(st.layouts[name])) };
         render();
         save();
-        SLApp.toast(`Layout "${name}" applied`, "ok");
+        SLApp.toast(I18N.t("Layout \"{0}\" applied", name), "ok");
       };
-      row.oncontextmenu = (e) => {
+      main.onclick = apply;
+      main.oncontextmenu = (e) => {
         e.preventDefault();
         SLApp.showCtxMenu(e.clientX, e.clientY, [
-          { icon: "play", label: "Apply", onClick: row.onclick },
+          { icon: "play", label: "Apply", onClick: apply },
           { icon: "save", label: "Overwrite with current", onClick: () => {
               st.layouts[name] = JSON.parse(JSON.stringify(st.pos));
               save(); renderLayoutList();
               SLApp.toast("Layout updated", "ok");
             } },
-          { sep: true },
-          { icon: "trash", label: "Delete", danger: true, onClick: () => {
-              delete st.layouts[name];
-              save(); renderLayoutList();
-            } },
         ]);
       };
+      const del = SLApp.mkBtn(ICON("trash"), "icon lay-del", () => {
+        delete st.layouts[name];
+        save(); renderLayoutList();
+        SLApp.toast(I18N.t("Layout \"{0}\" deleted", name), "ok");
+      });
+      del.title = I18N.t("Delete this layout");
+      row.appendChild(main); row.appendChild(del);
       dom.layoutList.appendChild(row);
     });
+    const delAll = SLApp.mkBtn(I18N.t("Delete all ({0})", names.length), "ghost lay-delall", async () => {
+      if (!(await SLApp.askConfirm(I18N.t("Delete all {0} saved layouts?", names.length),
+        { title: "Delete layouts", confirmLabel: "Delete all" }))) return;
+      st.layouts = {}; save(); renderLayoutList();
+      SLApp.toast("All layouts deleted", "ok");
+    });
+    dom.layoutList.appendChild(delAll);
   }
 
   // ----------------------------------------------------------------- sticky notes
@@ -669,7 +691,7 @@ window.ERD = (function () {
       text.contentEditable = "true";
       text.spellcheck = false;
       text.textContent = note.text;
-      text.setAttribute("data-ph", "Write a note…");
+      text.setAttribute("data-ph", I18N.t("Write a note…"));
       text.oninput = () => { note.text = text.textContent; save(); };
       text.onmousedown = (e) => e.stopPropagation(); // select text, don't drag
       n.appendChild(bar);
@@ -708,8 +730,8 @@ window.ERD = (function () {
     if (st.notes.length) {
       const delRow = h("div", "note-del-row");
       delRow.appendChild(h("span", "er-ed-taglabel", "Delete"));
-      const all = SLApp.mkBtn("All", "danger", () => {
-        if (!confirm(`Delete all ${st.notes.length} sticky notes?`)) return;
+      const all = SLApp.mkBtn("All", "danger", async () => {
+        if (!(await SLApp.askConfirm(I18N.t("Delete all {0} sticky notes?", st.notes.length), { title: "Delete notes", confirmLabel: "Delete all" }))) return;
         st.notes = [];
         save(); renderNotes(); renderLegend();
       });
@@ -721,8 +743,8 @@ window.ERD = (function () {
         const sw = h("span", "er-tagdot");
         sw.style.background = color;
         sw.title = `Delete the ${count} note${count > 1 ? "s" : ""} of this color`;
-        sw.onclick = () => {
-          if (!confirm(`Delete ${count} note${count > 1 ? "s" : ""} of this color?`)) return;
+        sw.onclick = async () => {
+          if (!(await SLApp.askConfirm(I18N.t("Delete {0} notes of this color?", count), { title: "Delete notes", confirmLabel: "Delete" }))) return;
           st.notes = st.notes.filter((n) => n.color !== color);
           save(); renderNotes(); renderLegend();
         };
@@ -825,7 +847,7 @@ window.ERD = (function () {
     dom.editor.innerHTML = "";
     if (!t) {
       dom.editor.appendChild(h("div", "er-editor-empty",
-        "Select a table to edit its columns,<br>rename it, or drop it."));
+        I18N.t("Select a table to edit its columns,<br>rename it, or drop it.")));
       return;
     }
     const isView = t.type === "view";
@@ -899,7 +921,7 @@ window.ERD = (function () {
             `<span class="ec-type">${ix.unique ? "UNIQUE " : ""}(${esc(ix.columns.join(", "))})</span>`;
           const acts = h("span", "ec-actions");
           const del = SLApp.mkBtn(ICON("trash"), "icon", async () => {
-            if (!confirm(`Drop index "${ix.name}"?`)) return;
+            if (!(await SLApp.askConfirm(I18N.t("Drop index \"{0}\"?", ix.name), { title: "Drop index", confirmLabel: "Drop" }))) return;
             const res = await API.dropIndex({ db: st.db, name: ix.name });
             if (res.error) return SLApp.toast(res.error, "err");
             SLApp.toast("Index dropped", "ok");
@@ -932,12 +954,12 @@ window.ERD = (function () {
           const view = SLApp.mkBtn(ICON("eye"), "icon", () => {
             const body = SLApp.el("div");
             body.innerHTML = `<pre class="inspect-pre">${esc(tg.sql)}</pre>`;
-            SLApp.openModal(`Trigger: ${tg.name}`, body,
+            SLApp.openModal(I18N.t("Trigger: {0}", tg.name), body,
               [SLApp.mkBtn("Close", "primary", SLApp.closeModal)]);
           });
           view.title = "View trigger SQL";
           const del = SLApp.mkBtn(ICON("trash"), "icon", async () => {
-            if (!confirm(`Drop trigger "${tg.name}"?`)) return;
+            if (!(await SLApp.askConfirm(I18N.t("Drop trigger \"{0}\"?", tg.name), { title: "Drop trigger", confirmLabel: "Drop" }))) return;
             const res = await API.dropTrigger(st.db, tg.name);
             if (res.error) return SLApp.toast(res.error, "err");
             SLApp.toast("Trigger dropped", "ok");
@@ -983,7 +1005,7 @@ window.ERD = (function () {
       SLApp.toast("Trigger created", "ok");
       renderEditor();
     });
-    SLApp.openModal(`Add trigger on ${t.name}`, body,
+    SLApp.openModal(I18N.t("Add trigger on {0}", t.name), body,
       [SLApp.mkBtn("Cancel", "ghost", SLApp.closeModal), go]);
     setTimeout(() => body.querySelector("#tgName").focus(), 30);
   }
@@ -1038,7 +1060,7 @@ window.ERD = (function () {
       SLApp.toast("Index created", "ok");
       renderEditor();
     });
-    SLApp.openModal(`Add index on ${t.name}`, body, [SLApp.mkBtn("Cancel", "ghost", SLApp.closeModal), go]);
+    SLApp.openModal(I18N.t("Add index on {0}", t.name), body, [SLApp.mkBtn("Cancel", "ghost", SLApp.closeModal), go]);
   }
 
   // ----------------------------------------------------------------- mutations
@@ -1073,7 +1095,7 @@ window.ERD = (function () {
       SLApp.toast("Column added", "ok");
       afterChange(table);
     });
-    SLApp.openModal(`Add column to ${table}`, body, [SLApp.mkBtn("Cancel", "ghost", SLApp.closeModal), go]);
+    SLApp.openModal(I18N.t("Add column to {0}", table), body, [SLApp.mkBtn("Cancel", "ghost", SLApp.closeModal), go]);
     setTimeout(() => body.querySelector("#acName").focus(), 30);
   }
 
@@ -1092,7 +1114,7 @@ window.ERD = (function () {
   }
 
   async function dropColumnConfirm(table, col) {
-    if (!confirm(`Drop column "${col}" from ${table}? This deletes its data.`)) return;
+    if (!(await SLApp.askConfirm(I18N.t("Drop column \"{0}\" from {1}? This deletes its data.", col, table), { title: "Drop column", confirmLabel: "Drop" }))) return;
     const res = await API.dropColumn({ db: st.db, table, column: col, backup: SLApp.autoBackup() });
     if (res.error) return SLApp.toast(res.error + (res.explanation ? " — " + res.explanation : ""), "err");
     SLApp.toast("Column dropped", "ok"); afterChange(table);
@@ -1117,9 +1139,9 @@ window.ERD = (function () {
 
   async function dropTableConfirm(table) {
     const isView = (st.tables.find((x) => x.name === table) || {}).type === "view";
-    if (!confirm(isView
+    if (!(await SLApp.askConfirm(isView
       ? `Drop view "${table}"? It's only a saved query — the underlying tables and their data are not touched.`
-      : `Drop table "${table}"? This permanently deletes the table and all its rows.`)) return;
+      : `Drop table "${table}"? This permanently deletes the table and all its rows.`, { title: isView ? "Drop view" : "Drop table", confirmLabel: "Drop" }))) return;
     const res = await API.dropTable({ db: st.db, table, backup: SLApp.autoBackup() });
     if (res.error) return SLApp.toast(res.error + (res.explanation ? " — " + res.explanation : ""), "err");
     delete st.pos[table]; delete st.tags[table]; save();
@@ -1211,15 +1233,20 @@ window.ERD = (function () {
         lines += `<circle cx="${r.dx}" cy="${r.dy}" r="3.5" fill="${PALETTE.warn}"/>`;
       });
     });
-    // cards
-    st.tables.forEach((t) => {
+    // cards — rounded to match the on-screen radius (--r). Fills are clipped to
+    // a rounded rect so the header/tag don't poke past the corners; a rounded
+    // stroke is drawn on top as the border.
+    const RX = 13;
+    st.tables.forEach((t, ti) => {
       const b = g[t.name];
       const x = b.x + ox, y = b.y + oy;
-      cards += `<g>`;
-      cards += `<rect x="${x}" y="${y}" width="${b.w}" height="${b.h}" fill="${PALETTE.surface}" stroke="${PALETTE.border2}"/>`;
+      const clip = `erc${ti}`;
+      const hh = (Object.values(b.cols)[0] ? Object.values(b.cols)[0].top : 30);
+      cards += `<clipPath id="${clip}"><rect x="${x}" y="${y}" width="${b.w}" height="${b.h}" rx="${RX}"/></clipPath>`;
+      cards += `<g clip-path="url(#${clip})">`;
+      cards += `<rect x="${x}" y="${y}" width="${b.w}" height="${b.h}" fill="${PALETTE.surface}"/>`;
       if (st.tags[t.name])
         cards += `<rect x="${x}" y="${y}" width="${b.w}" height="3" fill="${st.tags[t.name]}"/>`;
-      const hh = (Object.values(b.cols)[0] ? Object.values(b.cols)[0].top : 30);
       cards += `<rect x="${x}" y="${y}" width="${b.w}" height="${hh}" fill="${PALETTE.surface2}"/>`;
       cards += `<text x="${x + 11}" y="${y + hh / 2 + 4}" fill="${PALETTE.accent}" font-family="'IBM Plex Mono', monospace" font-size="12" font-weight="700">${esc(t.name.toUpperCase())}</text>`;
       t.columns.forEach((c) => {
@@ -1232,6 +1259,7 @@ window.ERD = (function () {
         cards += `<text x="${x + b.w - 8}" y="${cmid}" text-anchor="end" fill="${PALETTE.faint}" font-family="'IBM Plex Mono', monospace" font-size="10">${esc(c.type)}</text>`;
       });
       cards += `</g>`;
+      cards += `<rect x="${x}" y="${y}" width="${b.w}" height="${b.h}" rx="${RX}" fill="none" stroke="${PALETTE.border2}"/>`;
     });
 
     // sticky notes (drawn on top, like on screen)
@@ -1297,5 +1325,13 @@ window.ERD = (function () {
     img.src = url;
   }
 
-  return { init, open, refreshTheme, setSidePanel };
+  // re-render the diagram's source-wrapped chrome after a language switch
+  function relocalize() {
+    try { renderEditor(); } catch (_) {}
+    try { renderLayoutList(); } catch (_) {}
+    try { renderLegend(); } catch (_) {}
+    try { renderNotes(); } catch (_) {}
+  }
+
+  return { init, open, refreshTheme, setSidePanel, relocalize };
 })();
