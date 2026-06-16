@@ -44,11 +44,24 @@
   try { S = { ...SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem("sl.settings") || "{}") }; } catch (_) {}
   function saveSettings() { localStorage.setItem("sl.settings", JSON.stringify(S)); }
 
-  // app version + changelog. Bump APP_VERSION (and the sw.js CACHE to match) and
-  // add an entry here for every release with a big feature — the new entry pops
-  // up once on the next launch, and the full list lives in Settings → About.
-  const APP_VERSION = "4";
+  // app version + changelog. Version is X.x : X = big feature, x = small feature
+  // built on the big one (NEVER bug fixes). Every X or x bump gets a CHANGELOG
+  // entry + a what's-new popup. Bug fixes are the only non-changelog release —
+  // give them a 3rd patch segment (X.x.z, ignored by verNum so no popup fires).
+  // Bump the sw.js CACHE to match on every release so the new shell loads.
+  const APP_VERSION = "5.2.1";
   const CHANGELOG = [
+    { v: "5.2", date: "2026-06-16", items: [
+      "Single-key shortcuts: with nothing focused, tap one key to act (r = run, e / b / d = Editor / Browse / Diagram) — or just start typing and the active view's editor or filter picks it up automatically",
+    ] },
+    { v: "5.1", date: "2026-06-16", items: [
+      "Console errors now expand to a detailed explanation, naming the exact table, column or foreign-key link behind them",
+      "New console commands: run, pragma, db / use and close — run SQL, read or set PRAGMAs, and switch databases without leaving the keyboard",
+    ] },
+    { v: "5", date: "2026-06-16", items: [
+      "A console at the bottom of the page (click the status bar): a Logs tab for errors, query results and events, and a Commands tab (try help, clear, reset)",
+      "Clearer error messages that name the exact table or column that caused the problem",
+    ] },
     { v: "4", date: "2026-06-16", items: [
       "Smarter ER auto-layout: groups linked tables, sizes around each table, and spaces them so links are easier to read",
       "Version history — a “What’s new” popup after each update, and an update log in Settings",
@@ -67,8 +80,11 @@
       "Bilingual interface — switch between English and Français in Settings",
     ] },
   ];
-  const verNum = (v) => parseInt(v, 10) || 0;
-  const whatsNewSince = (last) => CHANGELOG.filter((e) => verNum(e.v) > verNum(last));
+  // compare on X.x only (a 3rd patch segment is a bug fix → ignored, no popup)
+  const verNum = (v) => {
+    const [maj, min] = String(v).split(".");
+    return (parseInt(maj, 10) || 0) * 1000 + (parseInt(min, 10) || 0);
+  };
   function markVersionSeen() { localStorage.setItem("sl.lastVersion", APP_VERSION); }
   function applySettings() {
     if (editor) {
@@ -141,13 +157,437 @@
 
   // ----------------------------------------------------------------- toast
   let toastTimer;
-  function toast(msg, kind = "") {
+  function toast(msg, kind = "", logIt = true) {
     const t = $("#toast");
     t.textContent = window.I18N ? I18N.t(msg) : msg;
     t.className = "toast " + kind;
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (t.hidden = true), 2600);
+    // every toast is also an event — mirror it into the console log, unless the
+    // caller logs a richer entry itself (logIt=false) to avoid a duplicate.
+    if (logIt) logg(kind === "err" ? "error" : kind === "ok" ? "ok" : "info", msg);
+  }
+
+  // =============================================================== CONSOLE
+  // A bottom drawer with two tabs: Logs (errors with full explanations, query
+  // outcomes, events) and Commands (admin / clear / reset). Opened from the
+  // status bar. The log buffer is in-memory only (cleared on reload).
+  const consoleBuf = [];          // { ts:Date, level, msg, detail }
+  let consoleOpen = false;
+  let consoleTab = "logs";        // "logs" | "cmd"
+  let consoleUnread = 0;          // unseen errors while the drawer is closed
+  let adminMode = localStorage.getItem("sl.admin") === "1";
+  let cmdPending = null;          // a continuation awaiting the next console line
+  let cmdPendingMask = false;     // mask the next echoed line (password entry)
+  // Gate for admin mode. This is a soft lock for a local dev tool — not real
+  // security (client-side JS is readable) — just a hurdle so `admin` stays
+  // hidden. Change this to your own secret.
+  const ADMIN_PASSWORD = "opensesame";
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const fmtTime = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+
+  // record an event. `detail` (optional) carries the rich error breakdown:
+  // { error, explanation, sql }. `args` interpolate {0},{1}… in msg at render
+  // time so logs follow live language switches. Errors raise the unread badge.
+  function logg(level, msg, detail, args) {
+    const entry = { ts: new Date(), level: level || "info", msg, args: args || [], detail };
+    consoleBuf.push(entry);
+    if (consoleBuf.length > 600) consoleBuf.shift();
+    if (consoleOpen && consoleTab === "logs") {
+      appendLogRow(entry);
+    } else if (level === "error") {
+      consoleUnread++;
+      updateConsoleBadge();
+    }
+    return entry;
+  }
+
+  function updateConsoleBadge() {
+    const b = $("#consoleBadge");
+    if (!b) return;
+    b.hidden = consoleUnread <= 0;
+    b.textContent = consoleUnread > 99 ? "99+" : String(consoleUnread);
+  }
+
+  // the raw SQLite message without our "E### TAG · " prefix, truncated — used as
+  // the one-line summary shown before an error row is expanded
+  function shortReason(err) {
+    if (!err) return "";
+    const i = err.indexOf("·");
+    const s = (i >= 0 ? err.slice(i + 1) : err).trim();
+    return s.length > 90 ? s.slice(0, 89) + "…" : s;
+  }
+
+  function logRowEl(entry) {
+    const row = el("div", "log-row " + entry.level);
+    row.appendChild(el("span", "log-ts", esc(fmtTime(entry.ts))));
+    const body = el("div", "log-msg");
+    const d = entry.detail;
+    const expandable = entry.level === "error" && d && (d.error || d.explanation || d.sql);
+
+    if (expandable) {
+      row.classList.add("log-expandable");
+      const head = el("div", "log-line");
+      head.appendChild(el("span", "log-caret", "▸"));
+      const title = el("span", "log-title");
+      title.textContent = I18N.t(entry.msg, ...(entry.args || []));
+      const short = shortReason(d.error);
+      if (short) {
+        const s = el("span", "log-short");
+        s.textContent = " — " + short;
+        title.appendChild(s);
+      }
+      head.appendChild(title);
+      head.addEventListener("click", () => row.classList.toggle("log-open"));
+      body.appendChild(head);
+
+      const dd = el("div", "log-detail");
+      if (d.error) dd.appendChild(el("div", "ld-raw", esc(d.error)));
+      if (d.explanation)
+        dd.appendChild(el("div", "ld-explain",
+          `<span class="bulb">💡</span><span>${esc(d.explanation)}</span>`));
+      if (d.refs && d.refs.length) {
+        const rb = el("div", "ld-refs");
+        rb.appendChild(el("div", "ld-refs-note", esc(I18N.t(
+          d.refsKind === "out"
+            ? "This row must point to an existing parent row through:"
+            : "Other rows still reference this row — remove or update them first, or use ON DELETE CASCADE:"))));
+        const ul = el("ul", "ld-refs-list");
+        d.refs.forEach((r) => { const li = el("li"); li.textContent = r; ul.appendChild(li); });
+        rb.appendChild(ul);
+        dd.appendChild(rb);
+      }
+      if (d.sql) dd.appendChild(el("div", "ld-sql", esc(d.sql.trim())));
+      body.appendChild(dd);
+    } else {
+      body.appendChild(document.createTextNode(I18N.t(entry.msg, ...(entry.args || []))));
+    }
+    row.appendChild(body);
+    return row;
+  }
+
+  function appendLogRow(entry) {
+    const box = $("#consoleLogs");
+    if (!box) return;
+    const empty = box.querySelector(".console-empty");
+    if (empty) empty.remove();
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    box.appendChild(logRowEl(entry));
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  function renderConsoleLogs() {
+    const box = $("#consoleLogs");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!consoleBuf.length) {
+      box.appendChild(el("div", "console-empty", esc(I18N.t("No activity yet. Errors, query results and events will appear here."))));
+      return;
+    }
+    consoleBuf.forEach((e) => box.appendChild(logRowEl(e)));
+    box.scrollTop = box.scrollHeight;
+  }
+
+  // the table targeted by a write statement (for FK error enrichment)
+  function tableFromSql(sql) {
+    const m = String(sql || "").match(
+      /\b(?:delete\s+from|update(?:\s+or\s+\w+)?|insert(?:\s+or\s+\w+)?\s+into)\s+["'`\[]?([A-Za-z_][\w$]*)/i);
+    return m ? m[1] : null;
+  }
+
+  // FK relationships around `table`, as "child.col → parent.col" lines.
+  //   kind "in"  → who references this table (blocks deleting/updating a parent)
+  //   kind "out" → what this table references (a missing parent blocks inserts)
+  async function fkRefLines(table, kind) {
+    let dia;
+    try { dia = await relDiagram(); } catch (_) { return []; }
+    const lines = [];
+    (dia.tables || []).forEach((t) => (t.foreign_keys || []).forEach((fk) => {
+      if (kind === "in" && fk.table === table) lines.push(`${t.name}.${fk.from} → ${table}.${fk.to}`);
+      if (kind === "out" && t.name === table) lines.push(`${table}.${fk.from} → ${fk.table}.${fk.to}`);
+    }));
+    return [...new Set(lines)];
+  }
+
+  // log a failed statement with full, expandable detail; for FK violations,
+  // spell out exactly which relationship is blocking it.
+  async function logQueryError(error, explanation, sql, table) {
+    const detail = { error, explanation, sql: sql ? String(sql).slice(0, 1200) : "" };
+    if (/foreign key constraint failed/i.test(error || "")) {
+      const t = table || tableFromSql(sql);
+      const kind = /^\s*delete\b/i.test(sql || "") ? "in" : "out";
+      if (t) {
+        const refs = await fkRefLines(t, kind);
+        if (refs.length) { detail.refs = refs; detail.refsKind = kind; }
+      }
+    }
+    logg("error", "Query failed", detail);
+  }
+
+  // ---- command terminal ----
+  function cmdPrint(text, cls) {
+    const out = $("#consoleCmdOut");
+    if (!out) return;
+    out.appendChild(el("div", "cmd-line " + (cls || "cmd-out"), esc(text)));
+    out.scrollTop = out.scrollHeight;
+  }
+
+  const ADMIN_CMDS = ["debug", "cache", "tour", "lang", "theme", "example", "eval", "set", "state"];
+
+  // pretty-print an eval result for the console transcript
+  function fmtEval(v) {
+    if (v === undefined) return "undefined";
+    if (typeof v === "function") return String(v);
+    try { return typeof v === "object" && v !== null ? JSON.stringify(v, null, 2) : String(v); }
+    catch (_) { return String(v); }
+  }
+
+  function printHelp() {
+    cmdPrint(I18N.t("Commands:"), "cmd-out");
+    cmdPrint("  help     — " + I18N.t("show this list"), "cmd-out");
+    cmdPrint("  clear    — " + I18N.t("clear the console"), "cmd-out");
+    cmdPrint("  close    — " + I18N.t("close the console"), "cmd-out");
+    cmdPrint("  version  — " + I18N.t("show the app version"), "cmd-out");
+    cmdPrint("  db       — " + I18N.t("show the current database"), "cmd-out");
+    cmdPrint("  use <db> — " + I18N.t("switch to another database"), "cmd-out");
+    cmdPrint("  run <sql>      — " + I18N.t("run a SQL statement"), "cmd-out");
+    cmdPrint("  pragma <n> [v] — " + I18N.t("read or set a SQLite PRAGMA"), "cmd-out");
+    cmdPrint("  reset    — " + I18N.t("erase all databases, settings and caches"), "cmd-out");
+    if (adminMode) {
+      cmdPrint(I18N.t("Admin commands:"), "cmd-out");
+      cmdPrint("  debug on|off — " + I18N.t("show or hide the Debug section in Settings"), "cmd-out");
+      cmdPrint("  cache        — " + I18N.t("clear the service worker & caches, then reload"), "cmd-out");
+      cmdPrint("  tour         — " + I18N.t("replay the welcome tour"), "cmd-out");
+      cmdPrint("  lang en|fr   — " + I18N.t("switch the interface language"), "cmd-out");
+      cmdPrint("  theme <id>   — " + I18N.t("switch the theme (nocturne, light, system…)"), "cmd-out");
+      cmdPrint("  example      — " + I18N.t("reset the bundled example database"), "cmd-out");
+      cmdPrint("  eval <js>    — " + I18N.t("run JavaScript in the app context"), "cmd-out");
+      cmdPrint("  set <k> [v]  — " + I18N.t("read or change any setting directly"), "cmd-out");
+      cmdPrint("  state        — " + I18N.t("dump a snapshot of internal app state"), "cmd-out");
+    }
+  }
+
+  function setAdminMode(on, announce) {
+    adminMode = !!on;
+    localStorage.setItem("sl.admin", adminMode ? "1" : "0");
+    if (announce !== false)
+      cmdPrint(adminMode
+        ? I18N.t("Admin mode ON — Debug tools are now in Settings, and admin commands are unlocked.")
+        : I18N.t("Admin mode OFF — Debug tools are hidden again."), adminMode ? "cmd-ok" : "cmd-out");
+  }
+
+  async function doFullReset() {
+    cmdPrint(I18N.t("Resetting… the page will reload."), "cmd-out");
+    wiping = true;                       // stop beforeunload from re-saving query tabs
+    wipeLocalState();
+    await API.wipeStorage();
+    await wipeCachesAndSW();
+    location.reload();
+  }
+
+  async function runConsoleCmd(raw) {
+    const line = raw.trim();
+
+    // a pending continuation (a y/n confirm, or a password) takes the next line.
+    // password lines are echoed masked and never stored.
+    if (cmdPending) {
+      cmdPrint("> " + (cmdPendingMask ? "•".repeat(Math.max(1, raw.length)) : line), "cmd-in");
+      const fn = cmdPending; cmdPending = null; cmdPendingMask = false;
+      const yes = /^(y|yes|o|oui)$/i.test(line);
+      return fn(line, yes);
+    }
+
+    cmdPrint("> " + line, "cmd-in");
+    if (!line) return;
+
+    const parts = line.split(/\s+/);
+    const name = parts[0].toLowerCase();
+    const arg = (parts[1] || "").toLowerCase();
+
+    switch (name) {
+      case "help": case "?": return printHelp();
+      case "clear": clearConsole(); return;
+      case "close": closeConsole(); return;
+      case "version":
+        return cmdPrint("SequenceLab v" + APP_VERSION, "cmd-out");
+      case "db": {
+        const cur = state.databases.find((d) => d.token === state.db);
+        return cmdPrint(I18N.t("Current database: {0}", cur ? cur.label : state.db), "cmd-out");
+      }
+      case "use": {
+        const q = parts.slice(1).join(" ").trim();
+        if (!q) return cmdPrint(I18N.t("Usage: use <database>"), "cmd-err");
+        const ql = q.toLowerCase();
+        const match = state.databases.find((d) =>
+          d.token.toLowerCase() === ql || (d.label || "").toLowerCase() === ql);
+        if (!match)
+          return cmdPrint(I18N.t("No database named “{0}”. Available: {1}",
+            q, state.databases.map((d) => d.label).join(", ")), "cmd-err");
+        await switchDb(match.token);
+        return cmdPrint(I18N.t("Switched to {0}.", match.label), "cmd-ok");
+      }
+      case "run": {
+        const sql = line.slice(parts[0].length).trim();
+        if (!sql) return cmdPrint(I18N.t("Usage: run <SQL>"), "cmd-err");
+        await executeSql(sql);     // same path as the Run button — outcome lands in the Logs tab
+        return cmdPrint(I18N.t("Ran — outcome is in the Logs tab, results in the editor panel."), "cmd-ok");
+      }
+      case "pragma": {
+        const pname = parts[1];
+        if (!pname) return cmdPrint(I18N.t("Usage: pragma <name> [value]"), "cmd-err");
+        if (parts.length >= 3) {
+          const pval = parts.slice(2).join(" ");
+          const r = await API.setPragma({ db: state.db, name: pname, value: pval });
+          if (r && r.error) return cmdPrint(r.error, "cmd-err");
+          return cmdPrint(`PRAGMA ${pname} = ${pval}`, "cmd-ok");
+        }
+        const res = await API.query(state.db, `PRAGMA ${pname};`, false, false);
+        if (res.error) return cmdPrint(res.error, "cmd-err");
+        const rows = (res.results && res.results[0] && res.results[0].rows) || [];
+        return cmdPrint(rows.length
+          ? `PRAGMA ${pname} = ${rows.map((r) => r.join(", ")).join(" | ")}`
+          : I18N.t("(no value)"), "cmd-out");
+      }
+      case "admin":
+        // secret: not listed in help. Turning OFF is free; turning ON needs the password.
+        if (adminMode) return setAdminMode(false);
+        cmdPrint(I18N.t("Password:"), "cmd-out");
+        cmdPendingMask = true;
+        cmdPending = (pw) => (pw === ADMIN_PASSWORD)
+          ? setAdminMode(true)
+          : cmdPrint(I18N.t("Incorrect password."), "cmd-err");
+        return;
+      case "reset":
+        cmdPrint(I18N.t("This will permanently delete ALL databases, settings and cached data. Continue? (y/n)"), "cmd-err");
+        cmdPending = (_, yes) => yes ? doFullReset() : cmdPrint(I18N.t("Cancelled."), "cmd-out");
+        return;
+    }
+
+    // ---- admin-only commands ----
+    if (ADMIN_CMDS.includes(name) && !adminMode)
+      return cmdPrint(I18N.t("“{0}” is an admin command. Type admin to unlock it.", name), "cmd-err");
+
+    switch (name) {
+      case "debug":
+        if (arg === "on" || arg === "off") { setAdminMode(arg === "on", false); }
+        return cmdPrint(I18N.t("Debug tools are {0} in Settings.", adminMode ? I18N.t("shown") : I18N.t("hidden")), "cmd-out");
+      case "cache":
+        cmdPrint(I18N.t("Clearing caches and reloading…"), "cmd-out");
+        await wipeCachesAndSW();
+        return location.reload();
+      case "tour":
+        cmdPrint(I18N.t("Starting the welcome tour…"), "cmd-out");
+        closeConsole();
+        return startWizard();
+      case "lang":
+        if (arg !== "en" && arg !== "fr") return cmdPrint(I18N.t("Usage: lang en | fr"), "cmd-err");
+        I18N.set(arg);
+        return cmdPrint(I18N.t("Language switched."), "cmd-ok");
+      case "theme": {
+        const id = parts[1] || "";
+        const ok = id === "system" || THEMES.some((t) => t.id === id);
+        if (!ok) return cmdPrint(I18N.t("Unknown theme. Try: {0}", "system, " + THEMES.map((t) => t.id).join(", ")), "cmd-err");
+        applyTheme(id);
+        return cmdPrint(I18N.t("Theme switched."), "cmd-ok");
+      }
+      case "example":
+        return resetExampleAction();
+      case "eval": {
+        // run JS in the app's own scope — the one thing you truly can't do from
+        // outside the console (admin-gated; this is your local dev tool)
+        const code = line.slice(parts[0].length).trim();
+        if (!code) return cmdPrint(I18N.t("Usage: eval <javascript>"), "cmd-err");
+        try { cmdPrint(fmtEval(eval(code)), "cmd-ok"); }       // eslint-disable-line no-eval
+        catch (e) { cmdPrint(String(e), "cmd-err"); }
+        return;
+      }
+      case "set": {
+        const k = parts[1];
+        if (!k) return cmdPrint(JSON.stringify(S), "cmd-out");          // dump all settings
+        if (parts.length < 3) return cmdPrint(`${k} = ${JSON.stringify(S[k])}`, "cmd-out");
+        let v = parts.slice(2).join(" ");
+        if (v === "true") v = true;
+        else if (v === "false") v = false;
+        else if (/^-?\d+(\.\d+)?$/.test(v)) v = Number(v);
+        S[k] = v; saveSettings(); applySettings(); rerenderData();
+        return cmdPrint(`${k} = ${JSON.stringify(S[k])}`, "cmd-ok");
+      }
+      case "state": {
+        const snap = {
+          version: APP_VERSION, db: state.db, view: state.view,
+          sidePanel: state.sidePanel, theme: state.theme, lang: I18N.lang,
+          admin: adminMode, tables: (state.tables || []).length, resultTabs: state.tabs.length,
+        };
+        return cmdPrint(JSON.stringify(snap, null, 2), "cmd-out");
+      }
+      default:
+        return cmdPrint(I18N.t("Unknown command: {0}. Type help for the list.", name), "cmd-err");
+    }
+  }
+
+  function clearConsole() {
+    if (consoleTab === "cmd") {
+      const out = $("#consoleCmdOut");
+      if (out) out.innerHTML = "";
+    } else {
+      consoleBuf.length = 0;
+      renderConsoleLogs();
+    }
+  }
+
+  // ---- open / close / tabs ----
+  function setConsoleTab(tab) {
+    consoleTab = tab;
+    $$(".console-tab").forEach((b) => b.classList.toggle("active", b.dataset.ctab === tab));
+    $("#consoleLogs").hidden = tab !== "logs";
+    $("#consoleCmd").hidden = tab !== "cmd";
+    if (tab === "logs") renderConsoleLogs();
+    else setTimeout(() => $("#consoleCmdInput") && $("#consoleCmdInput").focus(), 0);
+  }
+
+  function setConsoleHint(open) {
+    const label = open ? "Close console" : "Open console";
+    const txt = $(".sb-hint-text");
+    if (txt) txt.textContent = I18N.t(label);
+    const bar = $("#statusBar");
+    if (bar) { bar.title = I18N.t(label); bar.setAttribute("aria-label", I18N.t(label)); }
+  }
+  function openConsole(tab) {
+    consoleOpen = true;
+    consoleUnread = 0;
+    updateConsoleBadge();
+    $("#consolePanel").hidden = false;
+    $("#statusBar").setAttribute("aria-expanded", "true");
+    setConsoleHint(true);
+    setConsoleTab(tab || consoleTab);
+  }
+  function closeConsole() {
+    consoleOpen = false;
+    $("#consolePanel").hidden = true;
+    $("#statusBar").setAttribute("aria-expanded", "false");
+    setConsoleHint(false);
+  }
+  function toggleConsole() { consoleOpen ? closeConsole() : openConsole(); }
+
+  function initConsole() {
+    const bar = $("#statusBar");
+    bar.addEventListener("click", () => toggleConsole());
+    bar.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleConsole(); }
+    });
+    $("#consoleClose").addEventListener("click", (e) => { e.stopPropagation(); closeConsole(); });
+    $("#consoleClear").addEventListener("click", (e) => { e.stopPropagation(); clearConsole(); });
+    $$(".console-tab").forEach((b) =>
+      b.addEventListener("click", () => setConsoleTab(b.dataset.ctab)));
+    const input = $("#consoleCmdInput");
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { const v = input.value; input.value = ""; runConsoleCmd(v); }
+    });
+    // a friendly first line in the command tab
+    cmdPrint(I18N.t("SequenceLab console. Type help for commands."), "cmd-out");
+    updateConsoleBadge();
   }
 
   // ----------------------------------------------------------------- modal
@@ -1278,23 +1718,26 @@
     add(btnRow("SequenceLab v" + APP_VERSION, "Update log", "ghost",
       () => { closeModal(); showWhatsNew(CHANGELOG, I18N.t("Update log")); }));
 
-    section("Debug");
-    add(btnRow("Auto-link diagnostics", "Show", "ghost", () => { closeModal(); autoLinkDiagnostics(); }));
-    add(btnRow("Replay the welcome tour", "Replay", "ghost", () => { closeModal(); startWizard(); }));
-    add(btnRow("Service worker & caches", "Clear & reload", "ghost", async () => {
-      await wipeCachesAndSW();
-      location.reload();
-    }));
-    add(btnRow("Reset everything (databases, settings, tutorial)", "Clear everything", "danger", async () => {
-      if (!(await askConfirm(
-        "Delete ALL databases, settings and cached data, then reload? This cannot be undone.",
-        { title: "Clear everything", confirmLabel: "Clear everything" }))) return;
-      wiping = true;              // stop beforeunload from re-saving query tabs
-      wipeLocalState();
-      await API.wipeStorage();
-      await wipeCachesAndSW();
-      location.reload();
-    }));
+    // Debug tools are unlocked by admin mode (type `admin` in the console).
+    if (adminMode) {
+      section("Debug");
+      add(btnRow("Auto-link diagnostics", "Show", "ghost", () => { closeModal(); autoLinkDiagnostics(); }));
+      add(btnRow("Replay the welcome tour", "Replay", "ghost", () => { closeModal(); startWizard(); }));
+      add(btnRow("Service worker & caches", "Clear & reload", "ghost", async () => {
+        await wipeCachesAndSW();
+        location.reload();
+      }));
+      add(btnRow("Reset everything (databases, settings, tutorial)", "Clear everything", "danger", async () => {
+        if (!(await askConfirm(
+          "Delete ALL databases, settings and cached data, then reload? This cannot be undone.",
+          { title: "Clear everything", confirmLabel: "Clear everything" }))) return;
+        wiping = true;              // stop beforeunload from re-saving query tabs
+        wipeLocalState();
+        await API.wipeStorage();
+        await wipeCachesAndSW();
+        location.reload();
+      }));
+    }
 
     add(el("div", "field", `<div class="hint" style="margin-top:14px">SequenceLab runs fully offline. Databases are stored as real .db files in the app's data/ folder; settings live in this browser.</div>`));
 
@@ -1427,14 +1870,23 @@
         sql,
         partial: res.results || [],
       });
+      await logQueryError(res.error, res.explanation, sql);
     } else {
       const results = res.results || [];
       if (!results.length) {
         addResultTab({ kind: "message", title: "OK", message: "Statement executed." });
+        logg("ok", "Statement executed successfully.");
       } else {
         results.forEach((r, i) =>
           addResultTab(resultToTab(r, results.length > 1 ? i + 1 : null))
         );
+        const hasRows = results.some((r) => r.kind === "rows");
+        const rowsRet = results.reduce((a, r) => a + (r.kind === "rows" ? (r.row_count || 0) : 0), 0);
+        const affected = results.reduce((a, r) => a + (r.kind !== "rows" ? (r.rows_affected || 0) : 0), 0);
+        logg("ok",
+          hasRows ? "Query ran successfully ({0} statement(s), {1} row(s))"
+                  : "Query ran successfully ({0} statement(s), {1} row(s) affected)",
+          null, [results.length, hasRows ? rowsRet : affected]);
       }
     }
     await loadHistory();
@@ -1639,6 +2091,15 @@
     ["Inspect cell", ["Double-click (read-only)"]],
   ];
 
+  // single-key shortcuts (Flask.do-style) — active only when no field is focused
+  const QUICK_KEYS = [
+    ["Run", ["R"]],
+    ["Editor view", ["E"]],
+    ["Browse view", ["B"]],
+    ["Diagram view", ["D"]],
+  ];
+  const QUICK_KEYS_NOTE = "Quick keys — when no field is focused. Start typing to jump into the active view's editor or filter.";
+
   // results placeholder: shortcuts presented exactly like a query result
   function helpResult() {
     const wrap = el("div", "result-content");
@@ -1659,6 +2120,18 @@
       tr.appendChild(el("td", "", keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
       tbody.appendChild(tr);
     });
+    const sep = el("tr");
+    const sepTd = el("td", "kb-sep", esc(QUICK_KEYS_NOTE));
+    sepTd.colSpan = 3;
+    sep.appendChild(sepTd);
+    tbody.appendChild(sep);
+    QUICK_KEYS.forEach(([label, keys], j) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "rownum", SHORTCUTS.length + j + 1));
+      tr.appendChild(el("td", "", esc(label)));
+      tr.appendChild(el("td", "", keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
+      tbody.appendChild(tr);
+    });
     table.appendChild(tbody);
     gridWrap.appendChild(table);
     wrap.appendChild(gridWrap);
@@ -1671,6 +2144,18 @@
     const table = el("table", "grid help-grid");
     const tbody = el("tbody");
     SHORTCUTS.forEach(([label, keys]) => {
+      const tr = el("tr");
+      tr.appendChild(el("td", "help-label", esc(label)));
+      tr.appendChild(el("td", "help-keys",
+        keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
+      tbody.appendChild(tr);
+    });
+    const sep = el("tr");
+    const sepTd = el("td", "kb-sep", esc(QUICK_KEYS_NOTE));
+    sepTd.colSpan = 2;
+    sep.appendChild(sepTd);
+    tbody.appendChild(sep);
+    QUICK_KEYS.forEach(([label, keys]) => {
       const tr = el("tr");
       tr.appendChild(el("td", "help-label", esc(label)));
       tr.appendChild(el("td", "help-keys",
@@ -2027,10 +2512,17 @@
     if (!ids.length) return;
     if (!(await askConfirm(I18N.t("Delete {0} selected rows?", ids.length),
       { title: "Delete rows", confirmLabel: "Delete" }))) return;
-    let failed = 0, lastErr = "";
-    for (const id of ids) { const res = await API.deleteRow(state.db, browse.table, { __rowid__: id }); if (res.error) { failed++; lastErr = res.error; } }
+    let failed = 0, lastErr = "", lastRes = null;
+    for (const id of ids) { const res = await API.deleteRow(state.db, browse.table, { __rowid__: id }); if (res.error) { failed++; lastErr = res.error; lastRes = res; } }
     clearGridSel();
-    toast(failed ? `Deleted ${ids.length - failed}, ${failed} failed — ${lastErr}` : `Deleted ${ids.length} row${ids.length > 1 ? "s" : ""}`, failed ? "err" : "ok");
+    if (failed) {
+      // log the rich, expandable detail (FK blockers spelled out); the toast is a
+      // brief summary, so skip its auto-log to avoid a duplicate console entry
+      await logQueryError(lastRes.error, lastRes.explanation, `DELETE FROM ${quoteIfNeeded(browse.table)}`, browse.table);
+      toast(`Deleted ${ids.length - failed}, ${failed} failed — ${lastErr}`, "err", false);
+    } else {
+      toast(`Deleted ${ids.length} row${ids.length > 1 ? "s" : ""}`, "ok");
+    }
     reloadBrowse(); refreshSchema();
   }
 
@@ -4075,11 +4567,27 @@
     }
     openModal(title || I18N.t("What's new"), body, [mkBtn("Close", "primary", closeModal)]);
   }
+
+  // the post-update popup: a big "Update vX" hero, a "What's new?" line and the
+  // latest version's changes only — earlier versions stay in the Update log.
+  function showLatestNews() {
+    const e = CHANGELOG[0];
+    const body = el("div", "whatsnew");
+    const hero = el("div", "wn-hero");
+    hero.appendChild(el("div", "wn-hero-ver",
+      `<span class="wn-up">${esc(I18N.t("Update"))}</span> v${esc(e.v)}`)); // version = not translated
+    hero.appendChild(el("div", "wn-hero-q", I18N.t("What's new?")));
+    const ul = el("ul", "wn-list");
+    e.items.forEach((it) => { const li = el("li"); li.textContent = I18N.t(it); ul.appendChild(li); });
+    hero.appendChild(ul);
+    body.appendChild(hero);
+    openModal("SequenceLab", body, [mkBtn("Close", "primary", closeModal)]);
+  }
   function runPendingWhatsNew() {
     if (!pendingWhatsNew) return;
     pendingWhatsNew = false;
     markVersionSeen();
-    showWhatsNew([CHANGELOG[0]], I18N.t("What's new")); // brand-new user: just the latest highlights
+    showLatestNews(); // brand-new user: just the latest highlights, after the tour
   }
 
   // a compact theme picker (System + dark + light) for the wizard
@@ -4347,13 +4855,100 @@
     pop.style.top = Math.round(top) + "px";
   }
 
+  // ==================================================== SINGLE-KEY SHORTCUTS
+  // Flask.do-style delayed single-key shortcuts. When no field is focused, a
+  // printable key is held briefly: if a 2nd printable key arrives within the
+  // delay the user is typing — focus the active view's text target and insert
+  // both chars; otherwise the lone key runs its shortcut (if any) or is typed.
+  const SINGLE_KEY_SHORTCUT_DELAY = 150; // ms — tune if it feels too aggressive
+  const singleKeyShortcuts = {
+    r: () => { railSelect("editor"); runQuery(); }, // run
+    e: () => railSelect("editor"),
+    b: () => railSelect("browse"),
+    d: () => railSelect("diagram"),
+  };
+  let keyBuffer = "";
+  let keyTimer = null;
+  function clearKeyBuffer() {
+    keyBuffer = "";
+    if (keyTimer) { clearTimeout(keyTimer); keyTimer = null; }
+  }
+  function isEditableElement(el) {
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
+      el.isContentEditable === true || !!(el.closest && el.closest(".editor-host"));
+  }
+  // a single printable character (letters, digits, space, punctuation) with no
+  // command modifier — excludes Enter/Tab/Arrows/Backspace/Delete/Escape (len > 1)
+  function isPrintableKey(e) {
+    return !!e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey;
+  }
+  // the text field that should receive typing for the active view.
+  // never the SQL editor outside the Editor view — return null if the view has
+  // no text field (e.g. Diagram) so typed characters are simply ignored there.
+  function getTypingTarget() {
+    if (state.view === "editor") return { type: "editor" };
+    if (state.view === "browse") {
+      // browsing a table → its WHERE bar; no table selected → the table-list filter
+      const w = document.querySelector(".where-input");
+      if (w && w.offsetParent !== null) return { type: "input", el: w };
+      const f = $("#browseFilter");
+      if (f && f.offsetParent !== null) return { type: "input", el: f };
+    }
+    return null;
+  }
+  function insertIntoInput(el, text) {
+    el.focus();
+    const s = el.selectionStart != null ? el.selectionStart : el.value.length;
+    const en = el.selectionEnd != null ? el.selectionEnd : el.value.length;
+    el.value = el.value.slice(0, s) + text + el.value.slice(en);
+    el.selectionStart = el.selectionEnd = s + text.length;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  function typeIntoTarget(text) {
+    const t = getTypingTarget();
+    if (!t) return;                               // no text field for this view (e.g. Diagram) — ignore
+    if (t.type === "editor") editor.insert(text); // editor.insert focuses + inserts at caret
+    else insertIntoInput(t.el, text);
+  }
+  function onGlobalKeyDown(e) {
+    if (isEditableElement(document.activeElement)) return; // already typing in a field/editor
+    if (e.ctrlKey || e.metaKey || e.altKey) return;        // leave system/app shortcuts alone
+    if (e.isComposing || e.keyCode === 229) return;        // IME composition
+    // don't hijack keys meant for an open overlay (modal / console)
+    if (!$("#modalBackdrop").hidden || !$("#consolePanel").hidden) return clearKeyBuffer();
+    if (!isPrintableKey(e)) return clearKeyBuffer();        // non-printable → reset
+
+    e.preventDefault();
+    keyBuffer += e.key;
+    if (keyBuffer.length >= 2) {                            // 2nd char fast → it's text
+      const text = keyBuffer;
+      clearKeyBuffer();
+      typeIntoTarget(text);
+      return;
+    }
+    keyTimer = setTimeout(() => {
+      const key = keyBuffer;
+      clearKeyBuffer();
+      const action = singleKeyShortcuts[key];               // exact (unshifted) match only
+      if (action) action();
+      else typeIntoTarget(key);
+    }, SINGLE_KEY_SHORTCUT_DELAY);
+  }
+  function initSingleKeyShortcuts() {
+    document.addEventListener("keydown", onGlobalKeyDown);
+  }
+
   // ============================================================ BOOT
   async function boot() {
     applyTheme(state.theme);
     if (appZoom !== 1) document.body.style.zoom = appZoom;
     if (editorFs !== 13.5) document.documentElement.style.setProperty("--editor-fs", editorFs + "px");
     applySettings();
+    initConsole();
     initEditor();
+    initSingleKeyShortcuts();
     // editor lives in an i18n-excluded zone, so set its placeholder explicitly
     $("#sqlInput").placeholder = I18N.t("-- Write SQL here.  Ctrl+Enter to run.");
     editor.setValue(activeQueryTab().sql || "");
@@ -4373,9 +4968,8 @@
       pendingWhatsNew = true;
       setTimeout(startWizard, 400);
     } else if (verNum(APP_VERSION) > verNum(localStorage.getItem("sl.lastVersion"))) {
-      const since = whatsNewSince(localStorage.getItem("sl.lastVersion"));
       markVersionSeen();
-      setTimeout(() => showWhatsNew(since, I18N.t("What's new")), 500);
+      setTimeout(showLatestNews, 500); // show only the latest version's changes
     }
   }
   // re-render content the DOM pass can't reach (source-wrapped strings in
@@ -4393,6 +4987,7 @@
     loadSnippets();
     loadHistory();
     if (window.ERD && ERD.relocalize) ERD.relocalize();
+    if (consoleOpen && consoleTab === "logs") renderConsoleLogs();  // log msgs are source-wrapped
   });
 
   boot();

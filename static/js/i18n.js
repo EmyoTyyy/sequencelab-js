@@ -65,7 +65,7 @@ window.I18N = (function () {
     "[data-noi18n],.editor-host,.cm-highlight,.cm-gutter,.ac-dropdown," +
     ".schema-tree,#pinnedList,#fileList,#snippetList,#historyList," +
     ".browse-table-list,.er-table-list,.er-cards,.er-notes,.rec-body," +
-    ".bf-list,#toast,.cm-editor,.CodeMirror";
+    ".bf-list,#toast,.cm-editor,.CodeMirror,.console-logs,.console-cmd-out";
   const ATTRS = ["placeholder", "title", "aria-label"];
 
   function excluded(node) {

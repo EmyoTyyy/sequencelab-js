@@ -857,4 +857,159 @@ window.SL_FR_DICT = {
     "Outils de débogage : rejouer la visite, vider les caches, tout réinitialiser",
   "Bilingual interface — switch between English and Français in Settings":
     "Interface bilingue — basculer entre English et Français dans les Paramètres",
+  // ===================== console + v5 (added) =====================
+  "The table “{0}” doesn't exist in this database. Check the spelling, or open the schema sidebar to see the tables you can query.":
+    "La table « {0} » n'existe pas dans cette base de données. Vérifiez l'orthographe, ou ouvrez le panneau de schéma pour voir les tables disponibles.",
+  "The table “{0}” has no column named “{1}”. You're writing to a column that doesn't exist on that table — check the column list in the schema sidebar.":
+    "La table « {0} » n'a pas de colonne nommée « {1} ». Vous écrivez dans une colonne qui n'existe pas sur cette table — vérifiez la liste des colonnes dans le panneau de schéma.",
+  "There's no column named “{0}” in the table(s) you're querying. Check the spelling and that it belongs to the right table — expand the table in the sidebar to see its columns.":
+    "Il n'y a pas de colonne nommée « {0} » dans la ou les tables interrogées. Vérifiez l'orthographe et qu'elle appartient à la bonne table — développez la table dans le panneau pour voir ses colonnes.",
+  "“{0}” must be unique, but that value already exists in the table. Use a value that isn't already taken (for example a different id or email).":
+    "« {0} » doit être unique, mais cette valeur existe déjà dans la table. Utilisez une valeur qui n'est pas déjà prise (par exemple un id ou un e-mail différent).",
+  "“{0}” requires a value but was left empty (NULL). Provide a value for every NOT NULL column.":
+    "« {0} » exige une valeur mais a été laissée vide (NULL). Fournissez une valeur pour chaque colonne NOT NULL.",
+  "A CHECK constraint failed on “{0}”. The value isn't allowed by the rule defined for that column or table — adjust it to satisfy the constraint.":
+    "Une contrainte CHECK a échoué sur « {0} ». La valeur n'est pas autorisée par la règle définie pour cette colonne ou cette table — ajustez-la pour satisfaire la contrainte.",
+  "There's no SQL function called “{0}”. Check the spelling, or it may be a function SQLite doesn't support.":
+    "Il n'existe aucune fonction SQL appelée « {0} ». Vérifiez l'orthographe, ou il peut s'agir d'une fonction non prise en charge par SQLite.",
+  "Two of the joined tables share the column “{0}”. Prefix it with its table name, e.g. table.{0}, so SQLite knows which one you mean.":
+    "Deux des tables jointes partagent la colonne « {0} ». Préfixez-la avec le nom de sa table, par ex. table.{0}, pour que SQLite sache de laquelle il s'agit.",
+  "SQLite got confused near “{0}”. There's likely a typo, a missing comma/quote/parenthesis, or a misplaced keyword right around there.":
+    "SQLite s'est perdu près de « {0} ». Il y a probablement une faute de frappe, une virgule/un guillemet/une parenthèse manquante, ou un mot-clé mal placé juste à cet endroit.",
+  "“{0}” already exists. Use a different name, or drop the existing one first (CREATE … IF NOT EXISTS skips it).":
+    "« {0} » existe déjà. Utilisez un autre nom, ou supprimez d'abord l'existant (CREATE … IF NOT EXISTS l'ignore).",
+  "This row points to another row that doesn't exist — or you're deleting/updating a row that other rows still reference. Check the related table and make the referenced row exist first.":
+    "Cette ligne renvoie à une autre ligne qui n'existe pas — ou vous supprimez/modifiez une ligne que d'autres lignes référencent encore. Vérifiez la table liée et créez d'abord la ligne référencée.",
+  "A value doesn't match the column's expected type — for example putting text where an INTEGER PRIMARY KEY is expected.":
+    "Une valeur ne correspond pas au type attendu de la colonne — par exemple du texte là où une clé primaire INTEGER est attendue.",
+  "The statement looks unfinished. You're probably missing a closing quote, parenthesis, or the rest of the clause.":
+    "L'instruction semble inachevée. Il manque probablement un guillemet fermant, une parenthèse, ou la suite de la clause.",
+  "SQLite couldn't parse the statement. This is usually a typo, a missing comma, an unclosed quote/parenthesis, or a misplaced keyword.":
+    "SQLite n'a pas pu analyser l'instruction. C'est généralement une faute de frappe, une virgule manquante, un guillemet/une parenthèse non fermé, ou un mot-clé mal placé.",
+  "Commands:":
+    "Commandes :",
+  "show this list":
+    "afficher cette liste",
+  "clear the console":
+    "vider la console",
+  "show the app version":
+    "afficher la version de l'application",
+  "toggle admin mode (debug tools + admin commands)":
+    "activer/désactiver le mode admin (outils de débogage + commandes admin)",
+  "erase all databases, settings and caches":
+    "effacer toutes les bases de données, paramètres et caches",
+  "Admin commands:":
+    "Commandes admin :",
+  "show or hide the Debug section in Settings":
+    "afficher ou masquer la section Débogage dans les Paramètres",
+  "clear the service worker & caches, then reload":
+    "vider le service worker et les caches, puis recharger",
+  "replay the welcome tour":
+    "rejouer la visite de bienvenue",
+  "switch the interface language":
+    "changer la langue de l'interface",
+  "switch the theme (nocturne, light, system…)":
+    "changer le thème (nocturne, light, system…)",
+  "reset the bundled example database":
+    "réinitialiser la base d'exemple fournie",
+  "Admin mode ON — Debug tools are now in Settings, and admin commands are unlocked.":
+    "Mode admin ACTIVÉ — les outils de débogage sont maintenant dans les Paramètres, et les commandes admin sont déverrouillées.",
+  "Admin mode OFF — Debug tools are hidden again.":
+    "Mode admin DÉSACTIVÉ — les outils de débogage sont de nouveau masqués.",
+  "Resetting… the page will reload.":
+    "Réinitialisation… la page va se recharger.",
+  "This will permanently delete ALL databases, settings and cached data. Continue? (y/n)":
+    "Cela supprimera définitivement TOUTES les bases de données, paramètres et données en cache. Continuer ? (y/n)",
+  "Cancelled.":
+    "Annulé.",
+  "“{0}” is an admin command. Type admin to unlock it.":
+    "« {0} » est une commande admin. Tapez admin pour la déverrouiller.",
+  "Debug tools are {0} in Settings.":
+    "Les outils de débogage sont {0} dans les Paramètres.",
+  "shown":
+    "affichés",
+  "hidden":
+    "masqués",
+  "Clearing caches and reloading…":
+    "Vidage des caches et rechargement…",
+  "Starting the welcome tour…":
+    "Démarrage de la visite de bienvenue…",
+  "Usage: lang en | fr":
+    "Usage : lang en | fr",
+  "Language switched.":
+    "Langue changée.",
+  "Unknown theme. Try: {0}":
+    "Thème inconnu. Essayez : {0}",
+  "Theme switched.":
+    "Thème changé.",
+  "Unknown command: {0}. Type help for the list.":
+    "Commande inconnue : {0}. Tapez help pour la liste.",
+  "SequenceLab console. Type help for commands.":
+    "Console SequenceLab. Tapez help pour les commandes.",
+  "No activity yet. Errors, query results and events will appear here.":
+    "Aucune activité pour l'instant. Les erreurs, résultats de requêtes et événements apparaîtront ici.",
+  "Query failed":
+    "Échec de la requête",
+  "Statement executed successfully.":
+    "Instruction exécutée avec succès.",
+  "Query ran successfully ({0} statement(s), {1} row(s))":
+    "Requête exécutée avec succès ({0} instruction(s), {1} ligne(s))",
+  "Query ran successfully ({0} statement(s), {1} row(s) affected)":
+    "Requête exécutée avec succès ({0} instruction(s), {1} ligne(s) affectée(s))",
+  "Update":
+    "Mise à jour",
+  "What's new?":
+    "Quoi de neuf ?",
+  "Logs":
+    "Journaux",
+  "Commands":
+    "Commandes",
+  "Open console":
+    "Ouvrir la console",
+  "Close console":
+    "Fermer la console",
+  "Clear":
+    "Effacer",
+  "Type a command — try help":
+    "Tapez une commande — essayez help",
+  "A console at the bottom of the page (click the status bar): a Logs tab for errors, query results and events, and a Commands tab (try help, clear, reset)":
+    "Une console en bas de la page (cliquez sur la barre d'état) : un onglet Journaux pour les erreurs, résultats de requêtes et événements, et un onglet Commandes (essayez admin, clear, reset)",
+  "Clearer error messages that name the exact table or column that caused the problem":
+    "Des messages d'erreur plus clairs qui nomment la table ou la colonne exacte à l'origine du problème",
+  "Column":
+    "Colonne",
+  "Done in {0} ms":
+    "Terminé en {0} ms",
+
+  "close the console": "fermer la console",
+  "Password:": "Mot de passe :",
+  "Incorrect password.": "Mot de passe incorrect.",
+  "show the current database": "afficher la base de données actuelle",
+  "switch to another database": "basculer vers une autre base de données",
+  "Current database: {0}": "Base de données actuelle : {0}",
+  "Usage: use <database>": "Usage : use <base>",
+  "No database named “{0}”. Available: {1}": "Aucune base nommée « {0} ». Disponibles : {1}",
+  "Switched to {0}.": "Basculé vers {0}.",
+  "This row must point to an existing parent row through:":
+    "Cette ligne doit pointer vers une ligne parente existante via :",
+  "Other rows still reference this row — remove or update them first, or use ON DELETE CASCADE:":
+    "D'autres lignes référencent encore cette ligne — supprimez-les ou modifiez-les d'abord, ou utilisez ON DELETE CASCADE :",
+  "Usage: run <SQL>": "Usage : run <SQL>",
+  "Ran — outcome is in the Logs tab, results in the editor panel.": "Exécuté — le résultat est dans l'onglet Journaux, les résultats dans le panneau de l'éditeur.",
+  "Usage: pragma <name> [value]": "Usage : pragma <nom> [valeur]",
+  "(no value)": "(aucune valeur)",
+  "Usage: eval <javascript>": "Usage : eval <javascript>",
+  "run a SQL statement": "exécuter une instruction SQL",
+  "read or set a SQLite PRAGMA": "lire ou définir un PRAGMA SQLite",
+  "run JavaScript in the app context": "exécuter du JavaScript dans le contexte de l'application",
+  "read or change any setting directly": "lire ou modifier directement n'importe quel paramètre",
+  "dump a snapshot of internal app state": "afficher un instantané de l'état interne de l'application",
+  "Console errors now expand to a detailed explanation, naming the exact table, column or foreign-key link behind them":
+    "Les erreurs de la console s'étendent désormais en une explication détaillée, nommant la table, la colonne ou le lien de clé étrangère exact à l'origine du problème",
+  "New console commands: run, pragma, db / use and close — run SQL, read or set PRAGMAs, and switch databases without leaving the keyboard":
+    "Nouvelles commandes de console : run, pragma, db / use et close — exécuter du SQL, lire ou définir des PRAGMA, et changer de base sans quitter le clavier",
+  "Single-key shortcuts: with nothing focused, tap one key to act (r = run, e / b / d = Editor / Browse / Diagram) — or just start typing and the active view's editor or filter picks it up automatically":
+    "Raccourcis à une touche : sans champ actif, appuyez sur une touche pour agir (r = exécuter, e / b / d = Éditeur / Parcourir / Diagramme) — ou commencez simplement à taper et l'éditeur ou le filtre de la vue active le récupère automatiquement",
+  "Quick keys — when no field is focused. Start typing to jump into the active view's editor or filter.":
+    "Touches rapides — quand aucun champ n'est actif. Commencez à taper pour passer dans l'éditeur ou le filtre de la vue active.",
 };

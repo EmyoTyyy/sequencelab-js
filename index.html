@@ -267,10 +267,40 @@
 
   </div>
 
+  <!-- ===================== CONSOLE ===================== -->
+  <!-- bottom drawer: a Logs tab (errors, query outcomes, events) and a
+       Commands tab (admin / clear / reset …). Opened from the status bar. -->
+  <section class="console-panel" id="consolePanel" hidden>
+    <div class="console-head">
+      <div class="console-tabs">
+        <button class="console-tab active" data-ctab="logs">Logs</button>
+        <button class="console-tab" data-ctab="cmd">Commands</button>
+      </div>
+      <div class="console-head-actions">
+        <button id="consoleClear" class="btn icon" data-icon="trash" title="Clear"></button>
+        <button id="consoleClose" class="btn icon" data-icon="x" title="Close console"></button>
+      </div>
+    </div>
+    <div class="console-body">
+      <div class="console-logs" id="consoleLogs"></div>
+      <div class="console-cmd" id="consoleCmd" hidden>
+        <div class="console-cmd-out" id="consoleCmdOut"></div>
+        <div class="console-cmd-line">
+          <span class="console-prompt">&gt;</span>
+          <input id="consoleCmdInput" type="text" autocomplete="off" autocapitalize="off"
+                 spellcheck="false" placeholder="Type a command — try help">
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ===================== STATUS BAR ===================== -->
-  <footer class="statusbar">
+  <!-- the whole bar is the console toggle (darkens + reveals a hint on hover) -->
+  <footer class="statusbar" id="statusBar" role="button" tabindex="0" title="Open console" aria-label="Open console">
     <span id="dbInfo" class="status-item"></span>
     <span class="status-spacer"></span>
+    <span class="status-console-hint"><span class="sb-ico" data-icon="terminal"></span><span class="sb-hint-text">Open console</span></span>
+    <span id="consoleBadge" class="status-badge" hidden></span>
     <span id="sqliteVer" class="status-item"></span>
     <span id="editorStatus" class="status-item"></span>
   </footer>

@@ -366,24 +366,50 @@ const API = (() => {
     return out;
   }
 
+  // localize an explanation template (api.js runs after i18n.js loads, and these
+  // only fire at query time, so I18N is always available — fall back just in case)
+  const tr = (s, ...a) =>
+    (window.I18N && window.I18N.t)
+      ? window.I18N.t(s, ...a)
+      : String(s).replace(/\{(\d+)\}/g, (m, i) => (a[i] != null ? a[i] : m));
+
+  // Turn a raw SQLite error into a plain-language explanation. Where the engine
+  // names the offending object (a table, a column, a token), we quote it back so
+  // the message says exactly what went wrong and where.
   function explainError(msg) {
-    const m = String(msg).toLowerCase();
+    const raw = String(msg);
+    const m = raw.toLowerCase();
+    let mm;
+    if ((mm = raw.match(/no such table:\s*(\S+)/i)))
+      return tr("The table “{0}” doesn't exist in this database. Check the spelling, or open the schema sidebar to see the tables you can query.", mm[1]);
+    if ((mm = raw.match(/table\s+(\S+)\s+has no column named\s+(\S+)/i)))
+      return tr("The table “{0}” has no column named “{1}”. You're writing to a column that doesn't exist on that table — check the column list in the schema sidebar.", mm[1], mm[2]);
+    if ((mm = raw.match(/no such column:\s*(\S+)/i)))
+      return tr("There's no column named “{0}” in the table(s) you're querying. Check the spelling and that it belongs to the right table — expand the table in the sidebar to see its columns.", mm[1]);
+    if ((mm = raw.match(/unique constraint failed:\s*(.+)$/i)))
+      return tr("“{0}” must be unique, but that value already exists in the table. Use a value that isn't already taken (for example a different id or email).", mm[1].trim());
+    if ((mm = raw.match(/not null constraint failed:\s*(.+)$/i)))
+      return tr("“{0}” requires a value but was left empty (NULL). Provide a value for every NOT NULL column.", mm[1].trim());
+    if ((mm = raw.match(/check constraint failed:\s*(.+)$/i)))
+      return tr("A CHECK constraint failed on “{0}”. The value isn't allowed by the rule defined for that column or table — adjust it to satisfy the constraint.", mm[1].trim());
+    if ((mm = raw.match(/no such function:\s*(\S+)/i)))
+      return tr("There's no SQL function called “{0}”. Check the spelling, or it may be a function SQLite doesn't support.", mm[1]);
+    if ((mm = raw.match(/ambiguous column name:\s*(\S+)/i)))
+      return tr("Two of the joined tables share the column “{0}”. Prefix it with its table name, e.g. table.{0}, so SQLite knows which one you mean.", mm[1]);
+    if ((mm = raw.match(/near\s+"([^"]+)":\s*syntax error/i)))
+      return tr("SQLite got confused near “{0}”. There's likely a typo, a missing comma/quote/parenthesis, or a misplaced keyword right around there.", mm[1]);
+    if ((mm = raw.match(/(?:(?:table|view|index|trigger)\s+)?(\S+)\s+already exists/i)))
+      return tr("“{0}” already exists. Use a different name, or drop the existing one first (CREATE … IF NOT EXISTS skips it).", mm[1].trim());
+
     const rules = [
-      ["no such table", "The table you referenced doesn't exist in this database. Check the spelling, or look at the schema sidebar to see which tables are available."],
-      ["no such column", "One of the column names doesn't exist. Make sure it's spelled correctly and belongs to the table you're querying. Expand the table in the sidebar to see its columns."],
-      ["syntax error", "SQLite couldn't understand the statement. This is usually a typo, a missing comma, an unclosed quote/parenthesis, or a misplaced keyword near the highlighted spot."],
-      ["unique constraint failed", "You're trying to insert or update a value that must be unique, but that value already exists in the table (for example a duplicate id or email)."],
-      ["not null constraint failed", "A column that requires a value was left empty. Provide a value for every NOT NULL column."],
-      ["foreign key constraint failed", "This row references another row that doesn't exist (or you're deleting a row other rows still point to). Check the related table."],
-      ["datatype mismatch", "A value doesn't match the column's expected type — for example putting text where a number/integer primary key is expected."],
-      ["incomplete input", "The statement looks unfinished. You may be missing a closing quote, parenthesis, or the rest of the clause."],
-      ["ambiguous column name", "Two joined tables share this column name. Prefix it with the table name, e.g. users.id instead of just id."],
-      ["already exists", "An object with this name already exists. Use a different name, or drop the existing one first (CREATE ... IF NOT EXISTS skips it)."],
-      ["has no column named", "You're inserting into a column that doesn't exist on this table. Check the column list against the schema sidebar."],
+      ["foreign key constraint failed", "This row points to another row that doesn't exist — or you're deleting/updating a row that other rows still reference. Check the related table and make the referenced row exist first."],
+      ["datatype mismatch", "A value doesn't match the column's expected type — for example putting text where an INTEGER PRIMARY KEY is expected."],
+      ["incomplete input", "The statement looks unfinished. You're probably missing a closing quote, parenthesis, or the rest of the clause."],
+      ["syntax error", "SQLite couldn't parse the statement. This is usually a typo, a missing comma, an unclosed quote/parenthesis, or a misplaced keyword."],
       ["interrupted", "The query was cancelled before it finished."],
     ];
-    for (const [pat, friendly] of rules) if (m.includes(pat)) return friendly;
-    return "SQLite reported an error while running this statement. Read the raw message above for the specific cause.";
+    for (const [pat, friendly] of rules) if (m.includes(pat)) return tr(friendly);
+    return tr("SQLite reported an error while running this statement. Read the raw message above for the specific cause.");
   }
 
   // Error codes — first digit is the category, so a future error console can

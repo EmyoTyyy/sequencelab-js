@@ -98,13 +98,13 @@ files on disk:
 ## Features
 
 **Engine layer** (same API surface, implemented over sql.js)
-- create databases · open existing `.db` files · reset the example DB
+- create databases · open existing `.db` / `.sq3` / `.s3db` files · reset the example DB
 - list tables & views (with row counts) · read full schema (columns, types, PK, FK, DDL)
 - run arbitrary SQL (multi-statement aware) and return result sets
 - browse tables with pagination & sorting
 - inline row editing · insert · delete (parameterized, identifier-validated)
 - **typed-write validation**: a value that doesn't fit a column's affinity (text in an INTEGER/REAL column) is rejected instead of silently coerced
-- **coded errors**: every engine error carries a category code — `E1xx` SQL/syntax, `E2xx` constraints (`E201 FK`, `E202 UNIQUE`, `E203 NOTNULL`…), `E3xx` validation, `E4xx` naming, `E5xx` import/IO — ready for a future error console
+- **coded errors**: every engine error carries a category code — `E1xx` SQL/syntax, `E2xx` constraints (`E201 FK`, `E202 UNIQUE`, `E203 NOTNULL`…), `E3xx` validation, `E4xx` naming, `E5xx` import/IO — surfaced with a plain-English explanation in the failed result tab and the **Console** (see below)
 - import **CSV / JSON / Excel (.xlsx)** — append, or **replace-on-matching-PK** (upsert); optional table creation with inferred types; **duplicate primary keys are verified and rejected** with a clear message · import a whole `.sql` script
 - export **CSV / JSON / Excel (.xlsx)** (whole table or a query result) · **export the database as a SQL dump**
 - **attach other stored databases** for cross-db queries (`alias.table`)
@@ -117,7 +117,7 @@ files on disk:
 
 **Frontend** — desktop-app layout: thin **menu bar** (File / Edit / View / Help),
 far-left **icon rail** for the main sections, 240px sidebar, main workspace, and
-a bottom **status bar** (db path · SQLite version · last run).
+a bottom **status bar** (db path · SQLite version · last run) that **doubles as the Console toggle** (see below).
 - **multiple query tabs** (persisted per browser) with a ＋ button; **drag tabs to reorder** them (result tabs too)
 - SQL editor with **line numbers**, **syntax highlighting**, comment toggle (`Ctrl+/`), auto-paired quotes/brackets, duplicate-line (`Alt+Shift+↓`)
 - **Run split-button**: Run all · Run selected · Run current statement — the Run button becomes **Stop** while a query runs
@@ -144,18 +144,25 @@ a bottom **status bar** (db path · SQLite version · last run).
 - result tabs (one per statement, re-runs refresh in place); when idle the results area shows a keyboard-shortcuts help panel
 - query history panel & saved snippets panel
 - **Syntax reference panel** — clickable boxes for every statement plus a grouped SQLite function reference; examples load straight into the editor
-- beginner-friendly **plain-English error explanations**
+- beginner-friendly **plain-English error explanations** that **name the exact table or column** behind the failure (shown on the failed result tab and, in full, in the Console)
 - **6 themes** + a **System** option that follows your OS (dark → Nocturne, light → Paper) and flips live when the OS does; grouped into dark (Nocturne · Graphite & Amber · Orchid · Gray) and light (Paper · Beige) families in both Settings and the View menu. New installs default to **System**
 - **bilingual UI (English / Français)** — pick the language in Settings; the whole interface switches **live, no reload** (menus, panels, dialogs, toasts, settings, the syntax reference and error explanations). English is the default; the choice is remembered per browser. SQL keywords, example queries and your data are never translated. Built on a tiny dictionary-driven layer (`static/js/i18n.js` + `i18n.dict.js`) that translates the rendered chrome while explicitly excluding data zones (result/browse grids, the editor, the schema tree, record values)
 - rich **Settings** (slide toggles): **language**, tab width, word wrap, autocomplete behavior, editor font size, auto-format on run, **confirm destructive statements**, **read-only mode**, **preview writes before applying**, Browse page size, max rows per result, history recording/limit, NULL display, cell truncation, status bar, CSV delimiter/header defaults, **range-copy separator**, and **auto-backup before destructive SQL** (the last 5 copies per db are kept in IndexedDB)
 - **installable PWA**: over HTTPS a service worker caches the whole static shell (scripts, fonts, SQLite WASM) so the app installs to its own window and **loads & runs fully offline**; the browser chrome color tracks the active theme
+- **versioned releases**: each feature update bumps the app version and shows a one-time **"What's new"** popup of that version's changes; the **full history** lives in Settings → About → **Update log** (and the Help → About dialog)
+
+**Console** (click the bottom **status bar** to open the bottom drawer)
+- a **Logs** tab — a timestamped, running feed of errors, query outcomes ("query ran successfully"), and app events
+- **errors expand to a full breakdown**: the raw SQLite message, a plain-English explanation that **names the exact table or column** at fault, and — for a foreign-key violation — the **precise relationship blocking it** (e.g. deleting a referenced row spells out `order_items.product_id → products.id`)
+- a **Commands** tab — a small REPL: `help`, `clear`, `close`, `version`, `db` / `use <name>` (switch database), `run <sql>` (run a statement), `pragma <name> [value]` (read or set a PRAGMA), and `reset` (erase everything, with a y/n confirm)
 
 **Diagram view** (rail icon)
 - ER diagram of the database: table cards with column names & types
 - **primary keys highlighted**, foreign keys drawn as lines between the exact linked columns
 - **smart link routing**: links pick which side of each card to attach to, can start and end on the **same side** (looping around stacked cards), and reroute when the direct curve would pass through another table
 - **draggable** table cards (others dim while dragging) · pan · zoom · **drag a column onto another column to create a foreign key**
-- auto-layout groups **connected tables next to each other** (FK-adjacency ordering, serpentine grid) & fit-to-screen; layout persists per database in the browser
+- **auto-link**: infer foreign keys from related column names — `user_id` → `users.id` (basic), plus an opt-in **advanced** mode that matches a column to a table's primary key by **type and overlapping values** (e.g. `borders.country1` / `country2` → `country.id`). The toolbar's auto-link button **proposes** the links as dashed connectors you can drop one by one, then **Confirm auto-links** turns the ones you kept into real FKs; **auto-link diagnostics** (Settings) explain why each candidate did or didn't link
+- auto-layout groups **connected tables next to each other**, **sizes the spacing around each table's real dimensions**, and orders them to **reduce crossings so links stay readable**, with fit-to-screen; layout persists per database in the browser
 - **saved layouts** (Layouts rail sub-button): keep several named arrangements and switch between them
 - **legend & notes** (Notes rail sub-button): draggable **sticky notes** on the canvas (new ones cascade like OS windows), color **tags** on table cards (picked in the table editor), a legend naming what each color means, and bulk note deletion (all, or per color)
 - **export the diagram as PNG or SVG** — sticky notes and tag stripes are drawn in too, with the table cards' **rounded corners** preserved
@@ -165,30 +172,6 @@ a bottom **status bar** (db path · SQLite version · last run).
 - toasts announce via `aria-live`; icon buttons carry `aria-label`s
 - focus is trapped in dialogs and restored on close
 - ↑/↓ move the selected row in any grid; WCAG-checked contrast; compact/comfortable **density** setting
-
----
-
-## Keyboard shortcuts
-
-| Shortcut                  | Action                         |
-|---------------------------|--------------------------------|
-| `Ctrl/Cmd + Enter`        | Run                            |
-| `Ctrl/Cmd + Shift + Enter`| Run current statement          |
-| `Ctrl/Cmd + Space`        | Trigger autocomplete           |
-| `Ctrl/Cmd + S`            | Save current SQL as a snippet  |
-| `Ctrl/Cmd + /`            | Toggle comment                 |
-| `Alt + Shift + ↓`         | Duplicate line                 |
-| `Ctrl/Cmd + K`            | Command palette                |
-| `Ctrl/Cmd + F`            | Find & replace in editor       |
-| `Ctrl/Cmd + Shift + G`    | Search the whole database      |
-| `Alt + W`                 | Close result tab               |
-| `Alt + S`                 | Toggle side panel              |
-| `Tab` (in editor)         | Indent / accept autocomplete   |
-| Double-click a cell       | Edit it inline (Browse, or a single-table result grid) |
-| Click a cell / drag / shift-click | Select a cell / range (click the **#** for a whole row) |
-| `Ctrl/Cmd + C` (in a grid)| Copy the selected cells        |
-| `Delete` (in Browse)      | Delete the selected rows       |
-| `Backspace` (in a grid)   | Set the selected cells to NULL |
 
 ---
 

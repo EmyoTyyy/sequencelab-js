@@ -250,7 +250,14 @@ const SQLEditor = (() => {
 
     function acceptAutocomplete() {
       if (!acOpen || acActive < 0) return false;
-      const cw = currentWord();
+      let cw = currentWord();
+      // right after "table." the typed word is empty, but we still want Tab/Enter
+      // to insert the chosen column — synthesize a zero-length word at the caret
+      if (!cw) {
+        const pos = ta.selectionStart;
+        if (/[A-Za-z_][A-Za-z0-9_]*\.$/.test(ta.value.slice(0, pos)))
+          cw = { word: "", start: pos, pos };
+      }
       if (!cw) return false;
       const it = acItems[acActive];
       if (it.kind === "snip") {
@@ -309,22 +316,26 @@ const SQLEditor = (() => {
     // ---- key handling --------------------------------------------------
     ta.addEventListener("input", (e) => {
       render();
-      // auto-capitalize the just-completed keyword when a boundary is typed
-      if (autoCaps && e.data && /[\s(,;]/.test(e.data)) capitalizeLastWord();
+      // auto-capitalize the just-completed keyword when a boundary lands after it:
+      // a space/paren/comma/semicolon, OR a newline (Enter → inputType insertLineBreak)
+      if (autoCaps && ((e.data && /[\s(,;]/.test(e.data)) || e.inputType === "insertLineBreak"))
+        capitalizeWordBefore(ta.selectionStart - 1); // the boundary/newline sits at pos-1
       showAutocomplete();
     });
 
-    function capitalizeLastWord() {
-      const pos = ta.selectionStart;
-      const before = ta.value.slice(0, pos - 1); // exclude the boundary char
+    // uppercase the SQL keyword that ends right before index `pos`. Length is
+    // unchanged (same word, upper-cased), so the caret/selection is preserved.
+    function capitalizeWordBefore(pos) {
+      if (pos <= 0) return;
+      const before = ta.value.slice(0, pos);
       const m = /[A-Za-z_][A-Za-z0-9_$]*$/.exec(before);
       if (!m) return;
       const word = m[0];
       if (KW_SET.has(word.toUpperCase()) && word !== word.toUpperCase()) {
-        const start = before.length - word.length;
-        ta.value =
-          ta.value.slice(0, start) + word.toUpperCase() + ta.value.slice(before.length);
-        ta.selectionStart = ta.selectionEnd = pos;
+        const start = pos - word.length;
+        const s = ta.selectionStart, en = ta.selectionEnd;
+        ta.value = ta.value.slice(0, start) + word.toUpperCase() + ta.value.slice(pos);
+        ta.selectionStart = s; ta.selectionEnd = en;
         render();
       }
     }
@@ -406,13 +417,24 @@ const SQLEditor = (() => {
         showAutocomplete(true);
         return;
       }
-      // tab indents (when AC closed)
+      // tab indents (when AC closed) — capitalize the keyword before the caret first
       if (e.key === "Tab" && !acOpen) {
         e.preventDefault();
+        if (autoCaps) capitalizeWordBefore(ta.selectionStart);
         insertAtCursor(" ".repeat(tabW));
       }
     });
 
+    // hovering an item makes it the active one (so it highlights and Enter/Tab pick it)
+    dropdown.addEventListener("mousemove", (e) => {
+      const item = e.target.closest(".ac-item");
+      if (!item) return;
+      const i = parseInt(item.dataset.i, 10);
+      if (i === acActive || Number.isNaN(i)) return;
+      acActive = i;
+      dropdown.querySelectorAll(".ac-item").forEach((n, idx) =>
+        n.classList.toggle("active", idx === acActive));
+    });
     dropdown.addEventListener("mousedown", (e) => {
       const item = e.target.closest(".ac-item");
       if (!item) return;
