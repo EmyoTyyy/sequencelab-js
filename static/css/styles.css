@@ -727,9 +727,7 @@ table.grid th.rownum, table.grid td.rownum { color: var(--faint); text-align: ri
 .help-grid td.help-label { color: var(--muted); font-family: var(--sans); }
 .help-grid th.help-keys, .help-grid td.help-keys { text-align: left; min-width: 210px; }
 .help-keys kbd + kbd { margin-left: 4px; }
-/* quick-keys group caption inside the help/shortcuts tables */
-.kb-sep { color: var(--muted); font-size: 11px; font-style: italic; padding-top: 14px !important; text-align: center; }
-.help-grid td.kb-sep { text-align: center; }
+.kbd-or { color: var(--faint); margin: 0 7px; font-size: 11px; }
 kbd {
   font-family: var(--mono); font-size: 10.5px; color: var(--muted);
   background: var(--surface-2); border: 1px solid var(--border);

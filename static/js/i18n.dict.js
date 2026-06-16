@@ -1010,6 +1010,4 @@ window.SL_FR_DICT = {
     "Nouvelles commandes de console : run, pragma, db / use et close — exécuter du SQL, lire ou définir des PRAGMA, et changer de base sans quitter le clavier",
   "Single-key shortcuts: with nothing focused, tap one key to act (r = run, e / b / d = Editor / Browse / Diagram) — or just start typing and the active view's editor or filter picks it up automatically":
     "Raccourcis à une touche : sans champ actif, appuyez sur une touche pour agir (r = exécuter, e / b / d = Éditeur / Parcourir / Diagramme) — ou commencez simplement à taper et l'éditeur ou le filtre de la vue active le récupère automatiquement",
-  "Quick keys — when no field is focused. Start typing to jump into the active view's editor or filter.":
-    "Touches rapides — quand aucun champ n'est actif. Commencez à taper pour passer dans l'éditeur ou le filtre de la vue active.",
 };

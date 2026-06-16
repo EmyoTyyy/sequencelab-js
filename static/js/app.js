@@ -691,7 +691,7 @@
       (it.icon ? ICON(it.icon) : hasIco ? `<span class="ctx-ico"></span>` : "") +
       `<span>${esc(it.label)}</span>` +
       (it.sub ? `<span class="ctx-keys">›</span>` :
-       it.keys ? `<span class="ctx-keys">${esc(it.keys)}</span>` :
+       it.keys ? `<span class="ctx-keys">${esc(it.keys.replace(/\s+/g, "+"))}</span>` :
        it.checked ? `<span class="ctx-check">${ICON("check")}</span>` : "");
     if (it.sub && !intoSub) {
       // hover opens the flyout; clicking pins it open
@@ -2075,7 +2075,7 @@
   }
 
   const SHORTCUTS = [
-    ["Run", ["Ctrl", "Enter"]],
+    ["Run", [["Ctrl", "Enter"], ["R"]]], // two ways to run — shown together in one cell
     ["Run current statement", ["Ctrl", "Shift", "Enter"]],
     ["Autocomplete", ["Ctrl", "Space"]],
     ["Save snippet", ["Ctrl", "S"]],
@@ -2092,13 +2092,21 @@
   ];
 
   // single-key shortcuts (Flask.do-style) — active only when no field is focused
+  // (Run's single-key "R" lives in the SHORTCUTS "Run" row alongside Ctrl+Enter)
   const QUICK_KEYS = [
-    ["Run", ["R"]],
     ["Editor view", ["E"]],
     ["Browse view", ["B"]],
     ["Diagram view", ["D"]],
   ];
-  const QUICK_KEYS_NOTE = "Quick keys — when no field is focused. Start typing to jump into the active view's editor or filter.";
+
+  // render a shortcut's keys as <kbd> boxes. `keys` is a flat array (one combo)
+  // or an array of combos (alternatives), shown in the same cell, "/"-separated.
+  function renderKeys(keys) {
+    const groups = Array.isArray(keys[0]) ? keys : [keys];
+    return groups
+      .map((g) => g.map((k) => `<kbd>${esc(k)}</kbd>`).join(""))
+      .join(`<span class="kbd-or">/</span>`);
+  }
 
   // results placeholder: shortcuts presented exactly like a query result
   function helpResult() {
@@ -2117,19 +2125,14 @@
       const tr = el("tr");
       tr.appendChild(el("td", "rownum", i + 1));
       tr.appendChild(el("td", "", esc(label)));
-      tr.appendChild(el("td", "", keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
+      tr.appendChild(el("td", "", renderKeys(keys)));
       tbody.appendChild(tr);
     });
-    const sep = el("tr");
-    const sepTd = el("td", "kb-sep", esc(QUICK_KEYS_NOTE));
-    sepTd.colSpan = 3;
-    sep.appendChild(sepTd);
-    tbody.appendChild(sep);
     QUICK_KEYS.forEach(([label, keys], j) => {
       const tr = el("tr");
       tr.appendChild(el("td", "rownum", SHORTCUTS.length + j + 1));
       tr.appendChild(el("td", "", esc(label)));
-      tr.appendChild(el("td", "", keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
+      tr.appendChild(el("td", "", renderKeys(keys)));
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
@@ -2146,20 +2149,13 @@
     SHORTCUTS.forEach(([label, keys]) => {
       const tr = el("tr");
       tr.appendChild(el("td", "help-label", esc(label)));
-      tr.appendChild(el("td", "help-keys",
-        keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
+      tr.appendChild(el("td", "help-keys", renderKeys(keys)));
       tbody.appendChild(tr);
     });
-    const sep = el("tr");
-    const sepTd = el("td", "kb-sep", esc(QUICK_KEYS_NOTE));
-    sepTd.colSpan = 2;
-    sep.appendChild(sepTd);
-    tbody.appendChild(sep);
     QUICK_KEYS.forEach(([label, keys]) => {
       const tr = el("tr");
       tr.appendChild(el("td", "help-label", esc(label)));
-      tr.appendChild(el("td", "help-keys",
-        keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")));
+      tr.appendChild(el("td", "help-keys", renderKeys(keys)));
       tbody.appendChild(tr);
     });
     table.appendChild(tbody);
