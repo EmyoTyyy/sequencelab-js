@@ -211,6 +211,114 @@ const API = (() => {
     if (!cols.length) throw new Error(`Table '${table}' was not found.`);
     return cols;
   }
+
+  // --- auto-link: infer relationships from the "<base>_id" → <base>.id naming
+  // convention, for schemas that never declared real FOREIGN KEY constraints.
+  let autoLinkOn = true;
+  let autoLinkAdvanced = false;
+  // candidate target table names for a column base (singular/plural variants)
+  function linkCandidates(base) {
+    const b = base.toLowerCase(), out = [b];
+    if (b.endsWith("ies")) out.push(b.slice(0, -3) + "y");
+    else if (b.endsWith("es")) out.push(b.slice(0, -2));
+    if (b.endsWith("s")) out.push(b.slice(0, -1));
+    if (b.endsWith("y")) out.push(b.slice(0, -1) + "ies");
+    out.push(b + "s", b + "es");
+    return [...new Set(out)];
+  }
+  // map lowercased table name -> { name, idCol, pkCol, pkType }. views are
+  // excluded: you can't declare a foreign key that references a view.
+  function buildLinkIndex(db) {
+    const idx = new Map();
+    execRows(db, "SELECT name FROM sqlite_master WHERE type = 'table' " +
+      "AND name NOT LIKE 'sqlite_%'").forEach((r) => {
+      const cols = execRows(db, `PRAGMA table_info(${quoteIdent(r.name)})`);
+      const idc = cols.find((c) => /^id$/i.test(c.name));
+      const pks = cols.filter((c) => c.pk);
+      const pk = pks.length === 1 ? pks[0] : null;   // single-column PK only
+      const target = pk || idc || null;
+      idx.set(r.name.toLowerCase(), {
+        name: r.name,
+        idCol: idc ? idc.name : null,
+        pkCol: target ? target.name : null,
+        pkType: target ? (target.type || "") : "",
+      });
+    });
+    return idx;
+  }
+  // resolve a column to a candidate target table: the basic "<base>_id → <base>.id"
+  // rule, or (advanced) a fuzzy match where the column name relates to a table name
+  // (digits/separators stripped, also the last word) → that table's primary key.
+  function nameTarget(colName, idx, advanced) {
+    const m = /^(.+)_id$/i.exec(colName);
+    if (m) {
+      for (const cand of linkCandidates(m[1])) {
+        const t = idx.get(cand);
+        if (t && t.idCol) return { t, to: t.idCol, basic: true };
+      }
+      return null;
+    }
+    if (!advanced) return null;
+    const raw = colName.toLowerCase().replace(/_/g, " ").replace(/\s*\d+\s*$/, "").trim();
+    if (!raw) return null;
+    const tokens = raw.split(/\s+/);
+    const bases = [...new Set([raw.replace(/\s+/g, ""), tokens[tokens.length - 1]])];
+    for (const base of bases) {
+      for (const cand of linkCandidates(base)) {
+        const t = idx.get(cand);
+        if (t && t.pkCol) return { t, to: t.pkCol, basic: false };
+      }
+    }
+    return null;
+  }
+  // affinity compatibility for matching: an untyped column (BLOB affinity, e.g.
+  // `CREATE TABLE t (country1)`) is a wildcard — its real storage decides; the
+  // numeric affinities are mutually compatible; otherwise affinities must match.
+  function affinityCompatible(a, b) {
+    const A = sqlAffinity(a), B = sqlAffinity(b);
+    if (A === "BLOB" || B === "BLOB") return true;
+    const num = (x) => x === "INTEGER" || x === "REAL" || x === "NUMERIC";
+    return A === B || (num(A) && num(B));
+  }
+  // how many of a sample of the column's distinct non-null values exist in the
+  // target key column → { sampled, hits }
+  function overlapCounts(db, table, col, refTable, refCol) {
+    try {
+      const r = execRows(db,
+        `SELECT COUNT(*) AS sampled, SUM(CASE WHEN v IN (SELECT ${quoteIdent(refCol)} ` +
+        `FROM ${quoteIdent(refTable)}) THEN 1 ELSE 0 END) AS hits FROM (` +
+        `SELECT DISTINCT ${quoteIdent(col)} AS v FROM ${quoteIdent(table)} ` +
+        `WHERE ${quoteIdent(col)} IS NOT NULL LIMIT 200)`)[0] || {};
+      return { sampled: r.sampled || 0, hits: r.hits || 0 };
+    } catch (_) { return { sampled: 0, hits: 0 }; }
+  }
+  // "some values match" = at least half of the sampled distinct values line up
+  const overlapOk = (n) => n.sampled > 0 && n.hits >= Math.max(1, Math.ceil(n.sampled * 0.5));
+  // advanced proof: declared types are affinity-compatible AND the values fit.
+  function linkVerified(db, table, col, refTable, refCol, colType, refType) {
+    if (!affinityCompatible(colType, refType)) return false;
+    if (table === refTable && col === refCol) return false;
+    return overlapOk(overlapCounts(db, table, col, refTable, refCol));
+  }
+  // inferred FKs for one table, skipping columns already covered by a real FK.
+  // basic _id matches go straight in; advanced (related-name) matches must pass
+  // the type + value-overlap proof before being proposed.
+  function inferLinks(db, table, cols, realFks, idx) {
+    if (!autoLinkOn) return [];
+    const taken = new Set((realFks || []).map((f) => f.from));
+    const links = [];
+    cols.forEach((c) => {
+      if (taken.has(c.name)) return;
+      const hit = nameTarget(c.name, idx, autoLinkAdvanced);
+      if (!hit) return;
+      if (!hit.basic) {
+        if (!autoLinkAdvanced) return;
+        if (!linkVerified(db, table, c.name, hit.t.name, hit.to, c.type || "", hit.t.pkType)) return;
+      }
+      links.push({ from: c.name, table: hit.t.name, to: hit.to, auto: true });
+    });
+    return links;
+  }
   const b64 = (u8) => {
     let s = "";
     for (let i = 0; i < u8.length; i += 0x8000)
@@ -598,7 +706,7 @@ const API = (() => {
         new TextDecoder().decode(bytes.slice(0, 15)) === "SQLite format 3";
       if (!headOk) return { error: "That file is not a valid SQLite database." };
       let n = file.name;
-      if (!/\.(db|sqlite3?|db3)$/i.test(n)) n += ".db";
+      if (!/\.(db|sqlite3?|db3|sq3|s3db)$/i.test(n)) n += ".db";
       n = await freeName(n);
       await idbDel("kv", "handle::" + n); // an imported copy is never linked
       await idbPut("dbs", n, { bytes, mtime: Date.now() });
@@ -618,7 +726,7 @@ const API = (() => {
       try {
         [handle] = await window.showOpenFilePicker({
           types: [{ description: "SQLite database",
-            accept: { "application/x-sqlite3": [".db", ".sqlite", ".sqlite3", ".db3"] } }],
+            accept: { "application/x-sqlite3": [".db", ".sqlite", ".sqlite3", ".db3", ".sq3", ".s3db"] } }],
         });
       } catch (_) { return { cancelled: true }; }
       const file = await handle.getFile();
@@ -627,7 +735,7 @@ const API = (() => {
         new TextDecoder().decode(bytes.slice(0, 15)) === "SQLite format 3";
       if (!headOk) return { error: "That file is not a valid SQLite database." };
       let n = file.name;
-      if (!/\.(db|sqlite3?|db3)$/i.test(n)) n += ".db";
+      if (!/\.(db|sqlite3?|db3|sq3|s3db)$/i.test(n)) n += ".db";
       // re-linking the SAME file refreshes the existing entry from disk;
       // a different file that merely shares the name gets a fresh name
       const prev = await kvGet("handle::" + n);
@@ -712,9 +820,11 @@ const API = (() => {
       });
       if (table) {
         const { cols, fks } = colsFor(table);
-        const ddl = execRows(h.db,
-          "SELECT sql FROM sqlite_master WHERE name = ?", [table])[0];
-        return { table, columns: cols, foreign_keys: fks, ddl: ddl ? ddl.sql : null };
+        const meta = execRows(h.db,
+          "SELECT sql, type FROM sqlite_master WHERE name = ?", [table])[0];
+        const auto = (meta && meta.type === "view")
+          ? [] : inferLinks(h.db, table, cols, fks, buildLinkIndex(h.db));
+        return { table, columns: cols, foreign_keys: fks.concat(auto), ddl: meta ? meta.sql : null };
       }
       const schema = {};
       execRows(h.db,
@@ -725,17 +835,19 @@ const API = (() => {
     }),
     diagram: guard(async (name) => {
       const h = await getDb(name);
+      const idx = buildLinkIndex(h.db);
       const tables = execRows(h.db,
         "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') " +
         "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-      ).map((r) => ({
-        name: r.name, type: r.type,
-        columns: execRows(h.db, `PRAGMA table_info(${quoteIdent(r.name)})`).map((c) => ({
+      ).map((r) => {
+        const columns = execRows(h.db, `PRAGMA table_info(${quoteIdent(r.name)})`).map((c) => ({
           name: c.name, type: c.type || "", notnull: !!c.notnull, pk: !!c.pk,
-        })),
-        foreign_keys: execRows(h.db, `PRAGMA foreign_key_list(${quoteIdent(r.name)})`)
-          .map((f) => ({ from: f.from, table: f.table, to: f.to })),
-      }));
+        }));
+        const fks = execRows(h.db, `PRAGMA foreign_key_list(${quoteIdent(r.name)})`)
+          .map((f) => ({ from: f.from, table: f.table, to: f.to }));
+        const auto = r.type === "view" ? [] : inferLinks(h.db, r.name, columns, fks, idx);
+        return { name: r.name, type: r.type, columns, foreign_keys: fks.concat(auto) };
+      });
       return { tables };
     }),
 
@@ -1355,6 +1467,50 @@ const API = (() => {
       const v = execRows(db, "SELECT sqlite_version() AS v")[0].v;
       db.close();
       return { ok: true, sqlite: v };
+    }),
+
+    // toggle the "<base>_id → <base>.id" inferred relationships
+    setAutoLink: (v) => { autoLinkOn = v !== false; return { ok: true }; },
+    // also infer links from related column names verified by type + value overlap
+    setAutoLinkAdvanced: (v) => { autoLinkAdvanced = !!v; return { ok: true }; },
+
+    // debug: per-column explanation of why each reference-looking column does or
+    // doesn't auto-link (rule, target, type compatibility, value-overlap %, verdict)
+    autoLinkReport: guard(async (name) => {
+      const h = await getDb(name);
+      const idx = buildLinkIndex(h.db);
+      const tables = execRows(h.db, "SELECT name FROM sqlite_master WHERE type='table' " +
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name");
+      const report = [];
+      tables.forEach((tb) => {
+        const cols = execRows(h.db, `PRAGMA table_info(${quoteIdent(tb.name)})`);
+        const realFk = new Set(execRows(h.db, `PRAGMA foreign_key_list(${quoteIdent(tb.name)})`).map((f) => f.from));
+        cols.forEach((c) => {
+          const isId = /_id$/i.test(c.name);
+          const hit = nameTarget(c.name, idx, true); // resolve as if advanced were on
+          if (!isId && !hit) return;                 // not reference-looking — skip
+          // reason is a machine code; the UI localizes it. extra fields carry the
+          // numbers (affinities, overlap %) the localized message interpolates.
+          const e = { table: tb.name, column: c.name, type: c.type || "",
+            rule: isId ? "id" : "related", target: hit ? hit.t.name + "." + hit.to : "" };
+          if (realFk.has(c.name)) { e.verdict = "skip"; e.reason = "realfk"; }
+          else if (!hit) { e.verdict = "no"; e.reason = "notable"; }
+          else if (hit.basic) { e.verdict = "link"; e.reason = "byname"; }
+          else if (!affinityCompatible(c.type || "", hit.t.pkType)) {
+            e.verdict = "no"; e.reason = "typemismatch";
+            e.colAff = sqlAffinity(c.type || ""); e.refAff = sqlAffinity(hit.t.pkType);
+          } else {
+            const n = overlapCounts(h.db, tb.name, c.name, hit.t.name, hit.to);
+            e.pct = n.sampled ? Math.round((100 * n.hits) / n.sampled) : 0;
+            e.overlap = n.sampled ? n.hits + "/" + n.sampled : "0/0";
+            if (!n.sampled) { e.verdict = "no"; e.reason = "nodata"; }
+            else if (overlapOk(n)) { e.verdict = "link"; e.reason = "valuesok"; }
+            else { e.verdict = "no"; e.reason = "lowoverlap"; }
+          }
+          report.push(e);
+        });
+      });
+      return { report, advanced: autoLinkAdvanced, enabled: autoLinkOn };
     }),
 
     // -------------------------------------------------- debug / reset

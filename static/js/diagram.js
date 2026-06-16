@@ -60,15 +60,43 @@ window.ERD = (function () {
     $("#erExportPng").onclick = exportPng;
     $("#erNewTable").onclick = newTableDialog;
     $("#erLayoutSave").onclick = saveLayoutAs;
+    $("#erAutoLink").onclick = () => {
+      const wasOn = SLApp.autoLink();
+      SLApp.setAutoLink(!wasOn);
+      if (wasOn) autoDismissed.clear();    // leaving proposal mode — forget removals
+      syncAutoLinkBtn();
+      if (st.db) open(st.db);              // re-fetch so inferred links appear/disappear
+    };
+    $("#erAutoConfirm").onclick = confirmAutoLinks;
+    syncAutoLinkBtn();
     wirePanZoom();
+  }
+  let currentDiagramPanel = "tables";
+  function pendingAutoLinks() {
+    let n = 0;
+    (st.tables || []).forEach((t) => (t.foreign_keys || []).forEach((fk) => {
+      if (fk.auto && !autoDismissed.has(linkKey(t.name, fk))) n++;
+    }));
+    return n;
+  }
+  function syncAutoLinkBtn() {
+    const on = !!SLApp.autoLink();
+    const b = $("#erAutoLink");
+    if (b) b.classList.toggle("active", on);
+    // Confirm shows only on the diagram (Tables) view while there are proposals
+    // left to commit — so it hides after confirming and on any tab change.
+    const c = $("#erAutoConfirm");
+    if (c) c.hidden = !(on && currentDiagramPanel === "tables" && pendingAutoLinks() > 0);
   }
 
   // which sub-panel of the left aside is showing: tables | layouts | notes
   function setSidePanel(p) {
+    currentDiagramPanel = p;
     document.querySelectorAll(".diagram-side .side-sub-panel")
       .forEach((n) => (n.hidden = n.dataset.ds !== p));
     if (p === "layouts") renderLayoutList();
     if (p === "notes") renderLegend();
+    syncAutoLinkBtn();
   }
 
   // ----------------------------------------------------------------- load
@@ -96,6 +124,7 @@ window.ERD = (function () {
     const open_ = document.querySelector(".diagram-side .side-sub-panel:not([hidden])");
     if (open_ && open_.dataset.ds === "layouts") renderLayoutList();
     if (open_ && open_.dataset.ds === "notes") renderLegend();
+    syncAutoLinkBtn();   // reflect proposal count (hides Confirm once none remain)
   }
 
   function storageKey() { return "sl.erd." + st.db; }
@@ -122,40 +151,108 @@ window.ERD = (function () {
     }));
   }
 
+  // Layered layout: group tables by their FK-connected cluster, lay each cluster
+  // out left-to-right by distance from its hub, and order tables within each
+  // column by the average position of their neighbors (barycenter heuristic) so
+  // the links cross as little as possible. Unconnected tables pack into a grid.
   function autoLayout() {
-    const cols = Math.max(1, Math.ceil(Math.sqrt(st.tables.length)));
-    const COLW = 250, ROWH = 230;
-    // order tables by FK adjacency (BFS from the most-connected table of each
-    // cluster) so related tables land next to each other in the grid — fewer
-    // links have to travel across the whole diagram
+    // generous gaps + per-table size estimates so cards never overlap and links
+    // have room to breathe
+    const COL_GAP = 120, ROW_GAP = 64, BAND_GAP = 110, X0 = 40, Y0 = 40;
+    const HEADER_H = 36, COL_H = 28, CARD_PAD = 4; // matches the card CSS roughly
+    const tables = st.tables;
+    if (!tables.length) { st.pan = { x: 0, y: 0 }; st.zoom = 1; return; }
+    // estimate each card's rendered size from its column count / longest label
+    const size = {};
+    tables.forEach((t) => {
+      const cols = t.columns || [];
+      let maxLen = (t.name || "").length + 4;
+      cols.forEach((c) => (maxLen = Math.max(maxLen, (c.name || "").length + (c.type || "").length + 5)));
+      size[t.name] = {
+        w: Math.max(186, Math.min(360, 56 + maxLen * 6.8)),
+        h: HEADER_H + Math.max(1, cols.length) * COL_H + CARD_PAD,
+      };
+    });
+    const names = tables.map((t) => t.name);
     const adj = {};
-    st.tables.forEach((t) => (adj[t.name] = new Set()));
-    st.tables.forEach((t) => (t.foreign_keys || []).forEach((fk) => {
-      if (adj[fk.table]) { adj[t.name].add(fk.table); adj[fk.table].add(t.name); }
+    names.forEach((n) => (adj[n] = new Set()));
+    tables.forEach((t) => (t.foreign_keys || []).forEach((fk) => {
+      if (adj[fk.table] && fk.table !== t.name) { adj[t.name].add(fk.table); adj[fk.table].add(t.name); }
     }));
     const deg = (n) => adj[n].size;
-    const seen = new Set(), order = [];
-    st.tables.slice()
-      .sort((a, b) => deg(b.name) - deg(a.name))
-      .forEach((t) => {
-        if (seen.has(t.name)) return;
-        const queue = [t.name];
-        seen.add(t.name);
-        while (queue.length) {
-          const n = queue.shift();
-          order.push(n);
-          [...adj[n]].sort((a, b) => deg(b) - deg(a)).forEach((m) => {
-            if (!seen.has(m)) { seen.add(m); queue.push(m); }
-          });
-        }
-      });
-    // serpentine fill: row ends stay adjacent to the next row's start
-    order.forEach((name, i) => {
-      const row = Math.floor(i / cols);
-      let col = i % cols;
-      if (row % 2 === 1) col = cols - 1 - col;
-      st.pos[name] = { x: 40 + col * COLW, y: 40 + row * ROWH };
+    // connected components, most-connected first
+    const seen = new Set(), comps = [];
+    names.slice().sort((a, b) => deg(b) - deg(a)).forEach((n) => {
+      if (seen.has(n)) return;
+      const comp = [], q = [n]; seen.add(n);
+      while (q.length) {
+        const x = q.shift(); comp.push(x);
+        [...adj[x]].forEach((m) => { if (!seen.has(m)) { seen.add(m); q.push(m); } });
+      }
+      comps.push(comp);
     });
+    let cursorY = Y0;
+    comps.filter((c) => c.length > 1).forEach((comp) => {
+      // BFS layering from the most-connected node → x column = distance from hub
+      const root = comp.slice().sort((a, b) => deg(b) - deg(a))[0];
+      const layer = { [root]: 0 }, q = [root];
+      while (q.length) {
+        const x = q.shift();
+        [...adj[x]].forEach((m) => {
+          if (comp.indexOf(m) >= 0 && layer[m] === undefined) { layer[m] = layer[x] + 1; q.push(m); }
+        });
+      }
+      let maxL = 0; comp.forEach((n) => { if (layer[n] === undefined) layer[n] = 0; maxL = Math.max(maxL, layer[n]); });
+      const byLayer = [];
+      for (let L = 0; L <= maxL; L++) byLayer[L] = [];
+      comp.forEach((n) => byLayer[layer[n]].push(n));
+      byLayer.forEach((arr) => arr.sort((a, b) => deg(b) - deg(a)));
+      const idx = {};
+      const reindex = () => byLayer.forEach((arr) => arr.forEach((n, i) => (idx[n] = i)));
+      reindex();
+      // barycenter sweeps (alternating direction) minimize link crossings
+      for (let s = 0; s < 4; s++) {
+        const fwd = s % 2 === 0;
+        const seq = byLayer.map((_, i) => i);
+        if (!fwd) seq.reverse();
+        seq.forEach((L) => {
+          const nb = fwd ? L - 1 : L + 1;
+          if (nb < 0 || nb > maxL) return;
+          byLayer[L] = byLayer[L]
+            .map((n) => {
+              const ns = [...adj[n]].filter((m) => layer[m] === nb);
+              const bc = ns.length ? ns.reduce((acc, m) => acc + idx[m], 0) / ns.length : idx[n];
+              return { n, bc };
+            })
+            .sort((a, b) => a.bc - b.bc)
+            .map((o) => o.n);
+          reindex();
+        });
+      }
+      // x by cumulative real column widths; each layer's stack sized by real heights
+      const layerW = byLayer.map((arr) => Math.max.apply(null, arr.map((n) => size[n].w)));
+      const layerX = []; let x = X0;
+      for (let L = 0; L <= maxL; L++) { layerX[L] = x; x += layerW[L] + COL_GAP; }
+      const layerH = byLayer.map((arr) =>
+        arr.reduce((a, n) => a + size[n].h, 0) + ROW_GAP * Math.max(0, arr.length - 1));
+      const bandH = Math.max.apply(null, layerH.concat(0));
+      byLayer.forEach((arr, L) => {
+        let y = cursorY + (bandH - layerH[L]) / 2; // center each layer in the band
+        arr.forEach((n) => { st.pos[n] = { x: layerX[L], y }; y += size[n].h + ROW_GAP; });
+      });
+      cursorY += bandH + BAND_GAP;
+    });
+    // unconnected tables → a tidy size-aware grid band at the bottom
+    const singles = comps.filter((c) => c.length === 1).map((c) => c[0]);
+    if (singles.length) {
+      const perRow = Math.max(1, Math.round(Math.sqrt(singles.length)));
+      let x = X0, y = cursorY, rowH = 0, i = 0;
+      singles.forEach((n) => {
+        if (i === perRow) { i = 0; x = X0; y += rowH + ROW_GAP; rowH = 0; }
+        st.pos[n] = { x, y };
+        x += size[n].w + COL_GAP; rowH = Math.max(rowH, size[n].h); i++;
+      });
+    }
     st.pan = { x: 0, y: 0 };
     st.zoom = 1;
   }
@@ -233,6 +330,10 @@ window.ERD = (function () {
     return c ? g.y + c.top + c.h / 2 : g.y + HDR;
   }
 
+  // proposed auto-links the user has dismissed (per session, before confirming)
+  const autoDismissed = new Set();
+  const linkKey = (tname, fk) => tname + " " + fk.from + " " + fk.table + " " + fk.to;
+
   function drawLines() {
     const g = measure();
     let maxX = 0, maxY = 0;
@@ -240,14 +341,63 @@ window.ERD = (function () {
     dom.lines.setAttribute("width", maxX + 120);
     dom.lines.setAttribute("height", maxY + 80);
     dom.lines.innerHTML = "";
+    const staging = !!SLApp.autoLink();
     st.tables.forEach((t) => {
       (t.foreign_keys || []).forEach((fk) => {
+        if (fk.auto && autoDismissed.has(linkKey(t.name, fk))) return; // user removed it
         const s = g[t.name], d = g[fk.table];
         if (!s || !d) return;
         const r = routeLink(g, s, fk.from, d, fk.to, t.name === fk.table);
-        dom.lines.appendChild(wrapGroup(makePath(r.d), r.sx, r.sy, r.dx, r.dy));
+        const grp = wrapGroup(makePath(r.d, fk.auto), r.sx, r.sy, r.dx, r.dy);
+        if (fk.auto && staging) {
+          // a fat invisible path makes the dashed proposal easy to click to remove
+          const hit = makeHitPath(r.d);
+          hit.addEventListener("click", (e) => {
+            e.stopPropagation();
+            autoDismissed.add(linkKey(t.name, fk));
+            drawLines();
+          });
+          grp.appendChild(hit);
+        }
+        dom.lines.appendChild(grp);
       });
     });
+  }
+  function makeHitPath(d2) {
+    const p = document.createElementNS(SVGNS, "path");
+    p.setAttribute("d", d2);
+    p.setAttribute("fill", "none");
+    p.setAttribute("stroke", "transparent");
+    p.setAttribute("stroke-width", "14");
+    p.setAttribute("pointer-events", "stroke"); // re-enable clicks (the SVG is pointer-events:none)
+    p.style.cursor = "pointer";
+    const ttl = document.createElementNS(SVGNS, "title");
+    ttl.textContent = I18N.t("Click to remove this proposed link");
+    p.appendChild(ttl);
+    return p;
+  }
+  async function confirmAutoLinks() {
+    const links = [];
+    st.tables.forEach((t) => (t.foreign_keys || []).forEach((fk) => {
+      if (fk.auto && !autoDismissed.has(linkKey(t.name, fk)))
+        links.push({ table: t.name, column: fk.from, ref_table: fk.table, ref_column: fk.to });
+    }));
+    if (!links.length) return SLApp.toast(I18N.t("No auto-links to confirm."), "err");
+    if (!(await SLApp.askConfirm(
+      I18N.t("Create {0} foreign key(s) from the proposed auto-links?", links.length),
+      { title: "Confirm auto-links", confirmLabel: "Create" }))) return;
+    let okN = 0, failN = 0, lastErr = "";
+    for (const l of links) {
+      const res = await API.addFk({
+        db: st.db, table: l.table, column: l.column,
+        ref_table: l.ref_table, ref_column: l.ref_column, backup: SLApp.autoBackup(),
+      });
+      if (res && res.error) { failN++; lastErr = res.error; } else okN++;
+    }
+    if (failN) SLApp.toast(I18N.t("Created {0} of {1} — {2} failed", okN, okN + failN, failN) +
+      (lastErr ? " — " + lastErr : ""), failN === links.length ? "err" : "ok");
+    else SLApp.toast(I18N.t("Created {0} foreign key(s)", okN), "ok");
+    await open(st.db); // refresh — confirmed links are now real (solid) FKs; Confirm hides (none pending)
   }
 
   // how many sample points of a cubic land inside some other card
@@ -320,13 +470,14 @@ window.ERD = (function () {
     return out2(best);
   }
 
-  function makePath(d2) {
+  function makePath(d2, auto) {
     const p = document.createElementNS(SVGNS, "path");
     p.setAttribute("d", d2);
     p.setAttribute("fill", "none");
     p.setAttribute("stroke", PALETTE.accent);
     p.setAttribute("stroke-width", "1.5");
-    p.setAttribute("opacity", "0.7");
+    p.setAttribute("opacity", auto ? "0.5" : "0.7");
+    if (auto) p.setAttribute("stroke-dasharray", "5 4"); // inferred link = dashed
     return p;
   }
   function dot(x, y, color) {
@@ -886,7 +1037,7 @@ window.ERD = (function () {
         `<span class="er-key" style="width:14px">${c.pk ? ICON("key") : ""}</span>` +
         `<span class="ec-name">${esc(c.name)}</span>` +
         `<span class="ec-type">${esc(c.type)}</span>` +
-        (fk ? `<span class="er-fk" title="→ ${esc(fk.table)}.${esc(fk.to)}">${ICON("link")}</span>` : "");
+        (fk ? `<span class="er-fk${fk.auto ? " auto" : ""}" title="→ ${esc(fk.table)}.${esc(fk.to)}${fk.auto ? " — " + esc(I18N.t("auto-link")) : ""}">${ICON("link")}</span>` : "");
       if (!isView) {
         const acts = h("span", "ec-actions");
         const ren = SLApp.mkBtn(ICON("pencil"), "icon", () => renameColumnDialog(t.name, c.name));
@@ -1228,7 +1379,7 @@ window.ERD = (function () {
         const s = g[t.name], d = g[fk.table];
         if (!s || !d) return;
         const r = routeLink(g, s, fk.from, d, fk.to, t.name === fk.table, ox, oy);
-        lines += `<path d="${r.d}" fill="none" stroke="${PALETTE.accent}" stroke-width="1.5" opacity="0.7"/>`;
+        lines += `<path d="${r.d}" fill="none" stroke="${PALETTE.accent}" stroke-width="1.5" opacity="${fk.auto ? 0.5 : 0.7}"${fk.auto ? ' stroke-dasharray="5 4"' : ""}/>`;
         lines += `<circle cx="${r.sx}" cy="${r.sy}" r="3.5" fill="${PALETTE.purple}"/>`;
         lines += `<circle cx="${r.dx}" cy="${r.dy}" r="3.5" fill="${PALETTE.warn}"/>`;
       });

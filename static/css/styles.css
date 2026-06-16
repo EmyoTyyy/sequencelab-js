@@ -1150,3 +1150,28 @@ body.privacy #dbInfo { filter: blur(5px); }
 .tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 .tour-spacer { flex: 1 1 auto; }
 .tour-skip { color: var(--text-faint); }
+
+/* ===================== diagram auto-link toggle ===================== */
+.diagram-toolbar .btn.active { color: var(--accent); background: var(--accent-soft); }
+/* inferred (auto-linked) FK badges read as lighter / dashed than declared ones */
+.fk-badge.auto, .er-fk.auto { opacity: .6; }
+.fk-badge.auto { border: 1px dashed currentColor; background: transparent; }
+
+/* auto-link diagnostics (debug) */
+.al-diag-wrap { max-height: 52vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.al-diag { width: 100%; border-collapse: collapse; font-size: 12px; }
+.al-diag th, .al-diag td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.al-diag th { position: sticky; top: 0; background: var(--surface-2); color: var(--muted); font-weight: 600; }
+.al-diag .al-verdict { font-weight: 600; }
+.al-link .al-verdict { color: var(--ok); }
+.al-needsadv .al-verdict { color: var(--warn); }
+.al-no .al-verdict { color: var(--danger); }
+.al-skip .al-verdict { color: var(--text-faint); }
+.al-reason { color: var(--muted); font-size: 11px; }
+
+/* what's-new / update log */
+.whatsnew { display: flex; flex-direction: column; gap: 16px; }
+.wn-entry { border-left: 2px solid var(--accent); padding-left: 12px; }
+.wn-ver { font-family: var(--mono); font-size: 11.5px; color: var(--accent); margin-bottom: 6px; }
+.wn-list { margin: 0; padding-left: 18px; color: var(--muted); line-height: 1.55; }
+.wn-list li { margin: 3px 0; }

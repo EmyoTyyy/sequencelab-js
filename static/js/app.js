@@ -38,11 +38,38 @@
     recordHistory: true, maxHistory: 200,
     nullDisplay: "NULL", truncate: 0, showStatusbar: true, density: "comfortable",
     csvDelimiter: ",", csvHeader: true, autoBackup: false,
-    rangeSep: "tab",
+    rangeSep: "tab", autoLink: true, autoLinkAdvanced: false,
   };
   let S = { ...SETTINGS_DEFAULTS };
   try { S = { ...SETTINGS_DEFAULTS, ...JSON.parse(localStorage.getItem("sl.settings") || "{}") }; } catch (_) {}
   function saveSettings() { localStorage.setItem("sl.settings", JSON.stringify(S)); }
+
+  // app version + changelog. Bump APP_VERSION (and the sw.js CACHE to match) and
+  // add an entry here for every release with a big feature — the new entry pops
+  // up once on the next launch, and the full list lives in Settings → About.
+  const APP_VERSION = "4";
+  const CHANGELOG = [
+    { v: "4", date: "2026-06-16", items: [
+      "Smarter ER auto-layout: groups linked tables, sizes around each table, and spaces them so links are easier to read",
+      "Version history — a “What’s new” popup after each update, and an update log in Settings",
+    ] },
+    { v: "3", date: "2026-06-15", items: [
+      "Auto-link: infer foreign keys from related column names (basic, plus an advanced mode that matches by type & values) and confirm them in the Diagram",
+      "Auto-link diagnostics in Settings → Debug",
+      "Open .sq3 / .s3db SQLite files",
+    ] },
+    { v: "2", date: "2026-06-14", items: [
+      "Guided tour on first launch (replay it any time from Help)",
+      "System theme that follows your OS (dark → Nocturne, light → Paper)",
+      "Debug tools: replay the tour, clear caches, reset everything",
+    ] },
+    { v: "1", date: "2026-06-13", items: [
+      "Bilingual interface — switch between English and Français in Settings",
+    ] },
+  ];
+  const verNum = (v) => parseInt(v, 10) || 0;
+  const whatsNewSince = (last) => CHANGELOG.filter((e) => verNum(e.v) > verNum(last));
+  function markVersionSeen() { localStorage.setItem("sl.lastVersion", APP_VERSION); }
   function applySettings() {
     if (editor) {
       editor.setTabWidth(S.tabWidth);
@@ -52,6 +79,8 @@
     $(".statusbar").hidden = !S.showStatusbar;
     browse.limit = S.pageSize;
     document.body.dataset.density = S.density;
+    if (API.setAutoLink) API.setAutoLink(S.autoLink);                 // API is a lexical global, not window.API
+    if (API.setAutoLinkAdvanced) API.setAutoLinkAdvanced(S.autoLinkAdvanced);
   }
   function csvUrlOpts() {
     return { delimiter: S.csvDelimiter === "\t" ? "tab" : S.csvDelimiter, header: S.csvHeader ? 1 : 0 };
@@ -447,7 +476,7 @@
     body.appendChild(
       el("div", "field",
         `<label>${esc(I18N.t("Pick a .db file to import (copy)"))}</label>
-         <input type="file" id="openDbFile" accept=".db,.sqlite,.sqlite3,.db3" />
+         <input type="file" id="openDbFile" accept=".db,.sqlite,.sqlite3,.db3,.sq3,.s3db" />
          <div class="hint">${esc(I18N.t("Import copies the file into the browser's storage — the original on disk is never touched; get the edited copy back with File → Save database."))}<br><br>${hintLink}</div>`)
     );
     const imp = mkBtn("Import copy", fsOk ? "ghost" : "primary", async () => {
@@ -667,7 +696,7 @@
         <span class="er-key" style="width:14px">${c.pk ? ICON("key") : ""}</span>
         <span class="ec-name">${esc(c.name)}</span>
         <span class="ec-type">${esc(c.type)}${c.notnull ? " · NOT NULL" : ""}</span>
-        ${fk ? `<span class="er-fk" title="→ ${esc(fk.table)}.${esc(fk.to)}">${ICON("link")}</span>` : ""}
+        ${fk ? `<span class="er-fk${fk.auto ? " auto" : ""}" title="→ ${esc(fk.table)}.${esc(fk.to)}${fk.auto ? " — " + esc(I18N.t("auto-link")) : ""}">${ICON("link")}</span>` : ""}
       </div>`;
     }).join("");
     body.innerHTML =
@@ -690,7 +719,7 @@
         `<span>${esc(c.name)}</span>` +
         `<span class="col-type">${esc(c.type)}</span>` +
         (c.pk ? `<span class="pk-badge" title="primary key">PK</span>` : "") +
-        (fk ? `<span class="fk-badge" title="→ ${esc(fk.table)}.${esc(fk.to)}">FK</span>` : "");
+        (fk ? `<span class="fk-badge${fk.auto ? " auto" : ""}" title="→ ${esc(fk.table)}.${esc(fk.to)}${fk.auto ? " — " + esc(I18N.t("auto-link")) : ""}">FK</span>` : "");
       row.title = `${c.name} ${c.type}${c.notnull ? " NOT NULL" : ""}`;
       row.onclick = () => editor.setValue(insertText(editor.getValue(), c.name));
       container.appendChild(row);
@@ -1242,8 +1271,15 @@
     add(selRow("Range-copy separator", "rangeSep",
       [["tab", "Tab"], ["comma", "Comma"], ["semicolon", "Semicolon"], ["pipe", "Pipe"]]));
     add(swRow("Auto-backup before destructive SQL (keeps last 5)", "autoBackup"));
+    add(swRow("Advanced auto-link (match columns by type & values)", "autoLinkAdvanced",
+      () => { if (!$("#diagramView").hidden && window.ERD) ERD.open(state.db); }));
+
+    section("About");
+    add(btnRow("SequenceLab v" + APP_VERSION, "Update log", "ghost",
+      () => { closeModal(); showWhatsNew(CHANGELOG, I18N.t("Update log")); }));
 
     section("Debug");
+    add(btnRow("Auto-link diagnostics", "Show", "ghost", () => { closeModal(); autoLinkDiagnostics(); }));
     add(btnRow("Replay the welcome tour", "Replay", "ghost", () => { closeModal(); startWizard(); }));
     add(btnRow("Service worker & caches", "Clear & reload", "ghost", async () => {
       await wipeCachesAndSW();
@@ -3784,10 +3820,11 @@
   function aboutModal() {
     const body = el("div");
     body.innerHTML =
-      `<p style="margin:0 0 10px;font-family:var(--display);font-size:18px">Se<span class="brand-accent">Q</span>uenceLab</p>
-       <p style="margin:0 0 8px;color:var(--muted);line-height:1.6">A local SQLite workbench. Databases as real .db files, everything fully offline — no cloud, no account, no telemetry.</p>
+      `<p style="margin:0 0 4px;font-family:var(--display);font-size:18px">Se<span class="brand-accent">Q</span>uenceLab <span style="color:var(--faint);font-size:12px;font-family:var(--mono)">v${esc(APP_VERSION)}</span></p>
+       <p style="margin:8px 0;color:var(--muted);line-height:1.6">A local SQLite workbench. Databases as real .db files, everything fully offline — no cloud, no account, no telemetry.</p>
        <p style="margin:0;color:var(--faint);font-size:12px">Frontend: vanilla HTML/CSS/JS · Backend: sql.js + sqlite3</p>`;
-    openModal("About", body, [mkBtn("Close", "primary", closeModal)]);
+    const log = mkBtn("Update log", "ghost", () => { closeModal(); showWhatsNew(CHANGELOG, I18N.t("Update log")); });
+    openModal("About", body, [log, mkBtn("Close", "primary", closeModal)]);
   }
 
   // ============================================================ HISTORY
@@ -3948,6 +3985,8 @@
     openModal, closeModal, mkBtn, mkSelect, el, esc, showCtxMenu, askConfirm,
     onSchemaChanged: async () => { await refreshSchema(); },
     autoBackup: () => S.autoBackup,
+    autoLink: () => S.autoLink,
+    setAutoLink: (v) => { S.autoLink = !!v; saveSettings(); API.setAutoLink(S.autoLink); },
     runSelect: (sql) => { setView("editor"); editor.setValue(sql); runQuery(); },
     editorSet: (text) => { setView("editor"); editor.setValue(text); editor.focus(); },
     editorAppend: (text) => {
@@ -4013,9 +4052,34 @@
     body.appendChild(head);
     body.appendChild(el("p", "ob-lead",
       I18N.t("Take a quick guided tour of every panel, or jump straight in — you can replay the tour any time from the Help menu.")));
-    const skip = mkBtn(I18N.t("Skip"), "ghost", () => { finishOnboarding(); closeModal(); });
+    const skip = mkBtn(I18N.t("Skip"), "ghost", () => { finishOnboarding(); closeModal(); runPendingWhatsNew(); });
     const go = mkBtn(I18N.t("Take the tour"), "primary", () => { finishOnboarding(); closeModal(); startTour(); });
     openModal("SequenceLab", body, [skip, go]);
+  }
+
+  // --- what's-new / update log --------------------------------------------
+  let pendingWhatsNew = false; // first-launch: show the latest highlights after the tour
+  function showWhatsNew(entries, title) {
+    const body = el("div", "whatsnew");
+    if (!entries.length) {
+      body.appendChild(el("div", "hint", I18N.t("You're up to date.")));
+    } else {
+      entries.forEach((e) => {
+        const sec = el("div", "wn-entry");
+        sec.appendChild(el("div", "wn-ver", "v" + e.v + " · " + e.date)); // version/date = not translated
+        const ul = el("ul", "wn-list");
+        e.items.forEach((it) => { const li = el("li"); li.textContent = I18N.t(it); ul.appendChild(li); });
+        sec.appendChild(ul);
+        body.appendChild(sec);
+      });
+    }
+    openModal(title || I18N.t("What's new"), body, [mkBtn("Close", "primary", closeModal)]);
+  }
+  function runPendingWhatsNew() {
+    if (!pendingWhatsNew) return;
+    pendingWhatsNew = false;
+    markVersionSeen();
+    showWhatsNew([CHANGELOG[0]], I18N.t("What's new")); // brand-new user: just the latest highlights
   }
 
   // a compact theme picker (System + dark + light) for the wizard
@@ -4062,6 +4126,86 @@
         await Promise.all(regs.map((r) => r.unregister()));
       }
     } catch (_) {}
+  }
+
+  // --- auto-link diagnostics (debug): why each reference-looking column links ---
+  function alVerdict(v) {
+    return v === "link" ? I18N.t("Would link")
+      : v === "needsadv" ? I18N.t("Needs Advanced")
+      : v === "skip" ? I18N.t("Skipped") : I18N.t("Rejected");
+  }
+  function alReason(e, dv) {
+    if (dv === "needsadv") return I18N.t("would link with Advanced on");
+    switch (e.reason) {
+      case "realfk": return I18N.t("already a real foreign key");
+      case "notable": return I18N.t("no matching table / id column");
+      case "byname": return I18N.t("matched by name");
+      case "typemismatch": return I18N.t("type mismatch ({0} vs {1})", e.colAff, e.refAff);
+      case "nodata": return I18N.t("no rows to verify values");
+      case "valuesok": return I18N.t("type + values match");
+      case "lowoverlap": return I18N.t("only {0}% of values match", e.pct);
+      default: return "";
+    }
+  }
+  // what the verdict actually is given the current settings (a related-name match
+  // only links once Advanced auto-link is enabled)
+  function displayVerdict(e, advanced) {
+    if (e.verdict === "link" && e.rule === "related" && !advanced) return "needsadv";
+    return e.verdict;
+  }
+  async function autoLinkDiagnostics() {
+    const res = await API.autoLinkReport(state.db);
+    const rep = (res && res.report) || [];
+    const advanced = !!(res && res.advanced), enabled = !!(res && res.enabled);
+    const body = el("div");
+    const note = el("div", "hint", !enabled
+      ? I18N.t("Auto-link is currently off — turn it on to propose these links.")
+      : advanced
+        ? I18N.t("Advanced auto-link is on — related-name columns are matched by type and values.")
+        : I18N.t("Advanced auto-link is off — related-name rows below would link once you enable it."));
+    note.style.marginBottom = "10px";
+    body.appendChild(note);
+    if (!rep.length) {
+      body.appendChild(el("div", "msg-block", esc(I18N.t("No reference-looking columns found in this database."))));
+    } else {
+      const tbl = el("table", "al-diag");
+      tbl.setAttribute("data-noi18n", ""); // table/column names are identifiers
+      tbl.innerHTML =
+        `<thead><tr><th>${esc(I18N.t("Column"))}</th><th>${esc(I18N.t("Target"))}</th>` +
+        `<th>${esc(I18N.t("Rule"))}</th><th>${esc(I18N.t("Values"))}</th><th>${esc(I18N.t("Verdict"))}</th></tr></thead>`;
+      const tb = el("tbody");
+      rep.forEach((e) => {
+        const dv = displayVerdict(e, advanced);
+        const tr = el("tr", "al-" + dv);
+        const vals = e.pct != null ? esc(e.overlap + " (" + e.pct + "%)") : "—";
+        tr.innerHTML =
+          `<td>${esc(e.table)}.<b>${esc(e.column)}</b></td>` +
+          `<td>${esc(e.target || "—")}</td>` +
+          `<td>${esc(e.rule === "id" ? I18N.t("name (_id)") : I18N.t("related name"))}</td>` +
+          `<td>${vals}</td>` +
+          `<td><span class="al-verdict">${esc(alVerdict(dv))}</span> <span class="al-reason">${esc(alReason(e, dv))}</span></td>`;
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      const wrap = el("div", "al-diag-wrap"); wrap.appendChild(tbl);
+      body.appendChild(wrap);
+    }
+    // one-click enable: apply the setting, refresh the diagram, reopen the report
+    const enableAndReopen = (msg) => {
+      saveSettings(); applySettings();
+      if (!$("#diagramView").hidden && window.ERD) ERD.open(state.db);
+      toast(msg, "ok");
+      closeModal(); autoLinkDiagnostics();
+    };
+    const foot = [];
+    if (!enabled)
+      foot.push(mkBtn(I18N.t("Turn on Auto-link"), "primary",
+        () => { S.autoLink = true; enableAndReopen(I18N.t("Auto-link enabled")); }));
+    if (enabled && !advanced && rep.some((e) => e.verdict === "link" && e.rule === "related"))
+      foot.push(mkBtn(I18N.t("Enable Advanced auto-link"), "primary",
+        () => { S.autoLink = true; S.autoLinkAdvanced = true; enableAndReopen(I18N.t("Advanced auto-link enabled")); }));
+    foot.push(mkBtn("Close", foot.length ? "ghost" : "primary", closeModal));
+    openModal(I18N.t("Auto-link diagnostics"), body, foot);
   }
 
   // --- the spotlight tour ------------------------------------------------
@@ -4136,6 +4280,7 @@
     document.removeEventListener("keydown", tour.onKey, true);
     tour.overlay.remove();
     tour = null;
+    runPendingWhatsNew(); // first launch: show the highlights once the tour ends
   }
 
   function showStep(i) {
@@ -4222,8 +4367,16 @@
       if (h && h.sqlite)
         $("#sqliteVer").textContent = `SQLite ${h.sqlite} · in-browser (sql.js) · offline`;
     }).catch(() => {});
-    // first run: show the welcome wizard once
-    if (!localStorage.getItem(ONBOARD_KEY)) setTimeout(startWizard, 400);
+    // first run → welcome wizard (the what's-new highlights follow the tour);
+    // returning user on a newer version → show what changed since they last looked.
+    if (!localStorage.getItem(ONBOARD_KEY)) {
+      pendingWhatsNew = true;
+      setTimeout(startWizard, 400);
+    } else if (verNum(APP_VERSION) > verNum(localStorage.getItem("sl.lastVersion"))) {
+      const since = whatsNewSince(localStorage.getItem("sl.lastVersion"));
+      markVersionSeen();
+      setTimeout(() => showWhatsNew(since, I18N.t("What's new")), 500);
+    }
   }
   // re-render content the DOM pass can't reach (source-wrapped strings in
   // excluded zones + tab titles stored as concrete strings) on a live switch.

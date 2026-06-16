@@ -455,6 +455,7 @@ window.SL_FR_DICT = {
   "CSV header row": "Ligne d'en-tête CSV",
   "Range-copy separator": "Séparateur de copie de plage",
   "Auto-backup before destructive SQL (keeps last 5)": "Sauvegarde auto avant SQL destructeur (garde les 5 dernières)",
+  "Advanced auto-link (match columns by type & values)": "Lien auto avancé (associer les colonnes par type et valeurs)",
   "SequenceLab runs fully offline. Databases are stored as real .db files in the app's data/ folder; settings live in this browser.":
     "SequenceLab fonctionne entièrement hors ligne. Les bases de données sont stockées comme de vrais fichiers .db dans le dossier data/ de l'application ; les paramètres restent dans ce navigateur.",
   "Reset defaults": "Réinitialiser",
@@ -789,4 +790,71 @@ window.SL_FR_DICT = {
   "Clear everything": "Tout réinitialiser",
   "Delete ALL databases, settings and cached data, then reload? This cannot be undone.":
     "Supprimer TOUTES les bases de données, paramètres et données en cache, puis recharger ? Cette action est irréversible.",
+  "Auto-link diagnostics": "Diagnostic des liens auto",
+  "Show": "Afficher",
+  "Advanced auto-link is on — related-name columns are matched by type and values.":
+    "Le lien auto avancé est activé — les colonnes aux noms apparentés sont associées par type et valeurs.",
+  "Advanced auto-link is off — related-name rows show what would link once you enable it in Settings.":
+    "Le lien auto avancé est désactivé — les lignes « nom apparenté » montrent ce qui serait lié une fois activé dans les Paramètres.",
+  "Advanced auto-link is off — related-name rows below would link once you enable it.":
+    "Le lien auto avancé est désactivé — les lignes « nom apparenté » ci-dessous seraient liées une fois activé.",
+  "Auto-link is currently off — turn it on to propose these links.":
+    "Le lien auto est actuellement désactivé — activez-le pour proposer ces liens.",
+  "Needs Advanced": "Nécessite Avancé",
+  "would link with Advanced on": "se lierait avec le mode Avancé activé",
+  "Turn on Auto-link": "Activer le lien auto",
+  "Enable Advanced auto-link": "Activer le lien auto avancé",
+  "Auto-link enabled": "Lien auto activé",
+  "Advanced auto-link enabled": "Lien auto avancé activé",
+  "No reference-looking columns found in this database.": "Aucune colonne ressemblant à une référence trouvée dans cette base.",
+  "Target": "Cible",
+  "Rule": "Règle",
+  "Values": "Valeurs",
+  "Verdict": "Verdict",
+  "name (_id)": "nom (_id)",
+  "related name": "nom apparenté",
+  "Would link": "Lierait",
+  "Rejected": "Rejeté",
+  "Skipped": "Ignoré",
+  "already a real foreign key": "déjà une vraie clé étrangère",
+  "no matching table / id column": "aucune table correspondante / colonne id",
+  "matched by name": "associé par le nom",
+  "type mismatch ({0} vs {1})": "types incompatibles ({0} vs {1})",
+  "no rows to verify values": "aucune ligne pour vérifier les valeurs",
+  "type + values match": "type et valeurs correspondent",
+  "only {0}% of values match": "seulement {0}% des valeurs correspondent",
+
+  // ===================== diagram auto-link =====================
+  "Auto-link": "Lien auto",
+  "Automatically create foreign keys for columns with related names (e.g. user_id → users.id)":
+    "Créer automatiquement des clés étrangères pour les colonnes aux noms apparentés (ex. user_id → users.id)",
+  "Confirm auto-links": "Confirmer les liens auto",
+  "Create the proposed foreign keys": "Créer les clés étrangères proposées",
+  "Click to remove this proposed link": "Cliquez pour retirer ce lien proposé",
+  "auto-link": "lien auto",
+  "No auto-links to confirm.": "Aucun lien auto à confirmer.",
+  "Create {0} foreign key(s) from the proposed auto-links?": "Créer {0} clé(s) étrangère(s) à partir des liens auto proposés ?",
+  "Created {0} foreign key(s)": "{0} clé(s) étrangère(s) créée(s)",
+  "Created {0} of {1} — {2} failed": "{0} sur {1} créées — {2} en échec",
+
+  // ===================== version / what's new / update log =====================
+  "Update log": "Journal des mises à jour",
+  "What's new": "Nouveautés",
+  "You're up to date.": "Vous êtes à jour.",
+  "Smarter ER auto-layout: groups linked tables, sizes around each table, and spaces them so links are easier to read":
+    "Disposition ER plus intelligente : regroupe les tables liées, s'adapte à la taille de chaque table et les espace pour des liens plus lisibles",
+  "Version history — a “What’s new” popup after each update, and an update log in Settings":
+    "Historique des versions — une fenêtre « Nouveautés » après chaque mise à jour, et un journal des mises à jour dans les Paramètres",
+  "Auto-link: infer foreign keys from related column names (basic, plus an advanced mode that matches by type & values) and confirm them in the Diagram":
+    "Lien auto : déduit les clés étrangères à partir des noms de colonnes apparentés (mode de base, plus un mode avancé qui associe par type et valeurs) et les confirme dans le Diagramme",
+  "Auto-link diagnostics in Settings → Debug": "Diagnostic des liens auto dans Paramètres → Débogage",
+  "Open .sq3 / .s3db SQLite files": "Ouvrir les fichiers SQLite .sq3 / .s3db",
+  "Guided tour on first launch (replay it any time from Help)":
+    "Visite guidée au premier lancement (rejouable à tout moment depuis Aide)",
+  "System theme that follows your OS (dark → Nocturne, light → Paper)":
+    "Thème Système qui suit votre OS (sombre → Nocturne, clair → Papier)",
+  "Debug tools: replay the tour, clear caches, reset everything":
+    "Outils de débogage : rejouer la visite, vider les caches, tout réinitialiser",
+  "Bilingual interface — switch between English and Français in Settings":
+    "Interface bilingue — basculer entre English et Français dans les Paramètres",
 };
