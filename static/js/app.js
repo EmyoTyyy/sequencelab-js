@@ -29,6 +29,7 @@
     sidePanel: "schema",
     browsePanel: "tables",    // browse-side: "tables" | "filters"
     diagramPanel: "tables",   // diagram-side: "tables" | "layouts" | "notes"
+    notebookPanel: "notebooks", // notebook-side: "notebooks" | "outline" | "snippets"
   };
 
   // ----------------------------------------------------------------- settings
@@ -49,8 +50,12 @@
   // entry + a what's-new popup. Bug fixes are the only non-changelog release —
   // give them a 3rd patch segment (X.x.z, ignored by verNum so no popup fires).
   // Bump the sw.js CACHE to match on every release so the new shell loads.
-  const APP_VERSION = "5.2.1";
+  const APP_VERSION = "6";
   const CHANGELOG = [
+    { v: "6", date: "2026-06-17", items: [
+      "SQL Notebook (new rail tab): mix runnable SQL cells and markdown notes in one document, with each cell's results shown inline — create, rename, run-all and export notebooks",
+      "Export / import your workspace — settings, query tabs, pins, saved filters, diagram layouts and notebooks — as a single file (File menu)",
+    ] },
     { v: "5.2", date: "2026-06-16", items: [
       "Single-key shortcuts: with nothing focused, tap one key to act (r = run, e / b / d = Editor / Browse / Diagram) — or just start typing and the active view's editor or filter picks it up automatically",
     ] },
@@ -991,6 +996,46 @@
     await loadDatabases("example.db");
   }
 
+  // ---- workspace export / import -------------------------------------------
+  // Bundles the browser-side workspace — settings, theme, language, query tabs,
+  // pins, saved filters, ER layouts and notebooks — into one JSON file. The
+  // databases themselves (with their snippets/history) are separate: export
+  // those via File → Save database / Export database as SQL.
+  const WORKSPACE_SKIP = new Set(["sl.admin", "sl.lastVersion", "sl.onboarded", "sl.db"]);
+  function exportWorkspace() {
+    const data = {};
+    Object.keys(localStorage).forEach((k) => {
+      if (k.startsWith("sl.") && !WORKSPACE_SKIP.has(k)) data[k] = localStorage.getItem(k);
+    });
+    const payload = { app: "SequenceLab", kind: "workspace", version: APP_VERSION,
+      exported: new Date().toISOString(), data };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    triggerDownload(URL.createObjectURL(blob), "sequencelab-workspace.json");
+    toast("Workspace exported", "ok");
+  }
+  function importWorkspace() {
+    const input = el("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.onchange = async () => {
+      const f = input.files[0];
+      if (!f) return;
+      let parsed;
+      try { parsed = JSON.parse(await f.text()); } catch (_) { parsed = null; }
+      if (!parsed || parsed.kind !== "workspace" || !parsed.data || typeof parsed.data !== "object")
+        return toast("Not a SequenceLab workspace file", "err");
+      if (!(await askConfirm(
+        I18N.t("Import this workspace? It replaces your current settings, query tabs, pins, saved filters, diagram layouts and notebooks, then reloads."),
+        { title: "Import workspace", confirmLabel: "Import" }))) return;
+      Object.entries(parsed.data).forEach(([k, v]) => {
+        if (typeof k === "string" && k.startsWith("sl.") && typeof v === "string")
+          localStorage.setItem(k, v);
+      });
+      location.reload();
+    };
+    input.click();
+  }
+
   // ============================================================ SCHEMA TREE
   async function refreshSchema() {
     const [tablesRes, schemaRes] = await Promise.all([
@@ -1444,6 +1489,7 @@
     localStorage.setItem("sl.qtabs", JSON.stringify(qtabs));
   }
   window.addEventListener("beforeunload", persistQueryTabs);
+  window.addEventListener("beforeunload", () => { if (!wiping) persistNotebooks(); });
 
   // pointer-based tab reordering: the dragged tab follows the cursor on the X
   // axis only (fixed Y) while the other tabs slide in real time to make room.
@@ -2097,6 +2143,7 @@
     ["Editor view", ["E"]],
     ["Browse view", ["B"]],
     ["Diagram view", ["D"]],
+    ["Notebook view", ["N"]],
   ];
 
   // render a shortcut's keys as <kbd> boxes. `keys` is a flat array (one combo)
@@ -3647,6 +3694,14 @@
       ERD.setSidePanel(state.diagramPanel);
       return;
     }
+    const NB_PANELS = { noutline: "outline", nsnippets: "snippets" };
+    if (target === "notebook" || target in NB_PANELS) {
+      // the main Notebook tab defaults to the Notebooks list; subs pick Outline / Snippets
+      state.notebookPanel = NB_PANELS[target] || "notebooks";
+      setView("notebook");
+      setNotebookPanel(state.notebookPanel);
+      return;
+    }
     // everything else lives in the editor view's sidebar
     const panel = target === "editor" ? "schema" : target;
     state.sidePanel = panel;
@@ -3670,6 +3725,10 @@
           ? r === "diagram" ||
             (r === "dlayouts" && state.diagramPanel === "layouts") ||
             (r === "dnotes" && state.diagramPanel === "notes")
+        : state.view === "notebook"
+          ? r === "notebook" ||
+            (r === "noutline" && state.notebookPanel === "outline") ||
+            (r === "nsnippets" && state.notebookPanel === "snippets")
         : r === "editor" || r === state.sidePanel;
       b.classList.toggle("active", active);
     });
@@ -4233,6 +4292,9 @@
         } },
       { icon: "save", label: "Save database (file / download)", onClick: downloadDbAction },
       { sep: true },
+      { icon: "download", label: "Export workspace…", onClick: exportWorkspace },
+      { icon: "upload", label: "Import workspace…", onClick: importWorkspace },
+      { sep: true },
       { icon: "link", label: "Attach database…", onClick: attachDialog },
       { icon: "database", label: "Database tools…", onClick: dbToolsDialog },
       { icon: "gear", label: "Database settings…", onClick: pragmaDialog },
@@ -4377,12 +4439,14 @@
       list.appendChild(el("div", "msg-block",
         `<span style="color:var(--text-faint)">${I18N.t("No saved snippets.<br>Write SQL, then click ＋.<br><br>Tip: <code>${name}</code> placeholders prompt on insert, <code>${cursor}</code> sets the caret.")}</span>`));
     if (editor) editor.setSnippets(state.snippetCache.map((s) => ({ name: s.title, sql: s.sql })));
+    renderNbSnippets(); // keep the Notebook's Snippets panel in sync with this one
   }
 
   $("#btnSaveSnippet").onclick = () => snippetDialog(null);
 
-  function snippetDialog(existing) {
+  function snippetDialog(existing, prefillSql) {
     const body = el("div");
+    const sql = existing ? existing.sql : (prefillSql != null ? prefillSql : editor.getValue());
     body.innerHTML =
       `<div class="field">
          <label>Title</label>
@@ -4390,7 +4454,7 @@
        </div>
        <div class="field">
          <label>SQL</label>
-         <textarea id="snSql">${existing ? esc(existing.sql) : esc(editor.getValue())}</textarea>
+         <textarea id="snSql">${esc(sql)}</textarea>
        </div>`;
     const save = mkBtn("Save", "primary", async () => {
       const payload = {
@@ -4462,7 +4526,9 @@
     $(".layout").hidden = view !== "editor";
     $("#browseView").hidden = view !== "browse";
     $("#diagramView").hidden = view !== "diagram";
+    $("#notebookView").hidden = view !== "notebook";
     if (view === "diagram") ERD.open(state.db);
+    if (view === "notebook") openNotebook();
     updateRail();
   }
 
@@ -4851,6 +4917,383 @@
     pop.style.top = Math.round(top) + "px";
   }
 
+  // ============================================================ NOTEBOOK
+  // A notebook is an ordered list of cells — SQL (run against the active db,
+  // results inline) or Markdown (notes). Notebooks persist per-browser; each
+  // can be exported / imported as a .slnb file (JSON inside).
+  const NB_KEY = "sl.notebooks";
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  let nbData = null;            // { list:[{id,name,cells:[{id,type,source}]}], active }
+  const nbRefs = new Map();     // cellId -> { type, getSource }
+  const nbRunners = new Map();  // cellId -> () => run that SQL cell
+  const nbCellEls = new Map();  // cellId -> wrapper element (for the Outline jump-to)
+  let nbSaveTimer = null;
+  let lastNbEditor = null;      // most recently focused/built SQL cell editor (snippet target)
+
+  function nbDefault() {
+    const nb = { id: uid(), name: I18N.t("My notebook"), cells: [
+      { id: uid(), type: "md", source: "# Welcome\n\nThis is an **SQL notebook** — keep notes in text cells and run SQL in the cells below. Results show up inline." },
+      { id: uid(), type: "sql", source: "SELECT name FROM sqlite_master WHERE type = 'table';" },
+    ] };
+    return { list: [nb], active: nb.id };
+  }
+  function loadNotebooks() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(NB_KEY) || "null");
+      if (raw && Array.isArray(raw.list) && raw.list.length) return raw;
+    } catch (_) {}
+    return nbDefault();
+  }
+  function activeNb() {
+    if (!nbData) nbData = loadNotebooks();
+    return nbData.list.find((n) => n.id === nbData.active) || nbData.list[0];
+  }
+  function pullSources() {
+    if (!nbData) return;
+    activeNb().cells.forEach((c) => { const r = nbRefs.get(c.id); if (r) c.source = r.getSource(); });
+  }
+  function persistNotebooks() {
+    if (!nbData) return;
+    pullSources();
+    nbData.active = activeNb().id;
+    try { localStorage.setItem(NB_KEY, JSON.stringify(nbData)); } catch (_) {}
+  }
+  function schedulePersist() { clearTimeout(nbSaveTimer); nbSaveTimer = setTimeout(persistNotebooks, 500); }
+
+  function openNotebook() { if (!nbData) nbData = loadNotebooks(); renderNotebook(); setNotebookPanel(state.notebookPanel); }
+  function renderNotebook() {
+    const nb = activeNb();
+    $("#nbTitle").textContent = nb.name;
+    const box = $("#nbCells");
+    box.innerHTML = "";
+    nbRefs.clear(); nbRunners.clear(); nbCellEls.clear(); lastNbEditor = null;
+    nb.cells.forEach((c) => box.appendChild(c.type === "md" ? buildMdCell(c) : buildSqlCell(c)));
+    if (!nb.cells.length)
+      box.appendChild(el("div", "nb-empty", esc(I18N.t("Empty notebook — add a SQL or text cell below."))));
+    if (state.notebookPanel === "outline") renderNbOutline();
+  }
+
+  // side panels: Notebooks list · Outline · Snippets (shared with the editor)
+  function setNotebookPanel(p) {
+    state.notebookPanel = p;
+    $$("#notebookView .side-sub-panel").forEach((el) => { el.hidden = el.dataset.ns !== p; });
+    if (p === "notebooks") renderNbList();
+    else if (p === "outline") renderNbOutline();
+    else if (p === "snippets") renderNbSnippets();
+    updateRail();
+  }
+  function renderNbList() {
+    const box = $("#nbList"); if (!box) return;
+    box.innerHTML = "";
+    nbData.list.forEach((n) => {
+      const row = el("div", "nb-list-item" + (n.id === nbData.active ? " active" : ""));
+      row.appendChild(el("span", "nb-list-name", esc(n.name)));
+      const acts = el("div", "nb-list-actions");
+      acts.append(
+        mkIconBtn("pencil", I18N.t("Rename notebook"), (e) => { e.stopPropagation(); renameNotebook(n); }),
+        mkIconBtn("copy", I18N.t("Duplicate notebook"), (e) => { e.stopPropagation(); duplicateNotebook(n); }),
+        mkIconBtn("trash", I18N.t("Delete notebook"), (e) => { e.stopPropagation(); deleteNotebook(n); }));
+      row.appendChild(acts);
+      row.onclick = () => switchNotebook(n.id);
+      box.appendChild(row);
+    });
+  }
+  function renderNbOutline() {
+    const box = $("#nbOutline"); if (!box) return;
+    box.innerHTML = "";
+    const nb = activeNb();
+    if (!nb.cells.length) { box.appendChild(el("div", "side-hint nb-side-empty", esc(I18N.t("No cells yet.")))); return; }
+    nb.cells.forEach((c) => {
+      const r = nbRefs.get(c.id);
+      const src = (r ? r.getSource() : c.source) || "";
+      let label;
+      if (c.type === "md") {
+        const h = /^\s*#{1,4}\s+(.*)$/m.exec(src);
+        label = (h ? h[1] : src.split("\n").find((l) => l.trim()) || "").trim() || I18N.t("(empty text)");
+      } else {
+        label = (src.split("\n").find((l) => l.trim()) || "").trim() || I18N.t("(empty SQL)");
+      }
+      const row = el("div", "nb-ol-item nb-ol-" + c.type);
+      row.appendChild(el("span", "nb-ol-tag", c.type === "md" ? "¶" : "SQL"));
+      const sp = el("span", "nb-ol-text"); sp.textContent = label;
+      row.appendChild(sp);
+      row.onclick = () => scrollToCell(c.id);
+      box.appendChild(row);
+    });
+  }
+  function renderNbSnippets() {
+    const box = $("#nbSnippetList"); if (!box) return;
+    box.innerHTML = "";
+    const snips = state.snippetCache || [];
+    if (!snips.length) { box.appendChild(el("div", "side-hint nb-side-empty", esc(I18N.t("No saved snippets yet.")))); return; }
+    snips.forEach((s) => {
+      const item = el("div", "snippet-item");
+      item.innerHTML =
+        `<div class="snippet-title"><span class="snippet-pin">${ICON("bookmark")}</span>${esc(s.title)}</div>` +
+        `<div class="snippet-sql">${esc(s.sql)}</div>`;
+      item.title = I18N.t("Insert into the focused SQL cell");
+      item.onclick = () => insertSnippetIntoCell(s.sql);
+      box.appendChild(item);
+    });
+  }
+  function scrollToCell(id) {
+    const wrap = nbCellEls.get(id);
+    if (!wrap) return;
+    wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+    wrap.classList.add("nb-flash");
+    setTimeout(() => wrap.classList.remove("nb-flash"), 700);
+  }
+  function insertSnippetIntoCell(sql) {
+    if (!lastNbEditor) return toast("Click into a SQL cell first", "err");
+    lastNbEditor.insert(sql);
+  }
+
+  function mkIconBtn(icon, title, onClick) {
+    const b = el("button", "btn icon");
+    b.title = title; b.innerHTML = ICON(icon); b.onclick = onClick;
+    return b;
+  }
+  function cellTools(cell) {
+    const t = el("div", "nb-tools");
+    t.append(
+      mkIconBtn("arrow-up", I18N.t("Move up"), () => moveCell(cell, -1)),
+      mkIconBtn("arrow-down", I18N.t("Move down"), () => moveCell(cell, 1)),
+      mkIconBtn("trash", I18N.t("Delete cell"), () => deleteCell(cell)));
+    return t;
+  }
+
+  function buildSqlCell(cell) {
+    const wrap = el("div", "nb-cell nb-sql");
+    const head = el("div", "nb-cell-head");
+    const run = el("button", "btn ghost nb-run");
+    run.innerHTML = ICON("play") + `<span>${esc(I18N.t("Run"))}</span>`;
+    head.append(el("span", "nb-tag", "SQL"), run, el("span", "nb-bar-spacer"), cellTools(cell));
+    wrap.appendChild(head);
+
+    const host = el("div", "editor-host nb-eh");
+    host.innerHTML =
+      '<div class="cm-gutter" aria-hidden="true"><div class="cm-gutter-inner">1</div></div>' +
+      '<pre class="cm-highlight" aria-hidden="true"><code></code></pre>' +
+      '<textarea class="cm-input" spellcheck="false" wrap="off" autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>' +
+      '<div class="ac-dropdown" hidden></div>';
+    const result = el("div", "nb-result");
+    wrap.append(host, result);
+
+    const ta = host.querySelector("textarea");
+    const ed = SQLEditor.create({
+      host, textarea: ta, highlight: host.querySelector(".cm-highlight"),
+      gutter: host.querySelector(".cm-gutter-inner"), dropdown: host.querySelector(".ac-dropdown"),
+      onRun: () => runCell(cell, result, ed),
+    });
+    ed.setSchema(state.schema); ed.setAutoCaps(state.autoCaps); ed.setValue(cell.source || "");
+    ta.addEventListener("input", schedulePersist);
+    ta.addEventListener("focus", () => { lastNbEditor = ed; });
+    run.onclick = () => runCell(cell, result, ed);
+    nbRefs.set(cell.id, { type: "sql", getSource: () => ed.getValue() });
+    nbRunners.set(cell.id, () => runCell(cell, result, ed));
+    nbCellEls.set(cell.id, wrap);
+    lastNbEditor = ed; // default snippet target = last SQL cell (until one is focused)
+    return wrap;
+  }
+
+  function buildMdCell(cell) {
+    const wrap = el("div", "nb-cell nb-md");
+    const head = el("div", "nb-cell-head");
+    head.append(el("span", "nb-tag", esc(I18N.t("Text"))), el("span", "nb-bar-spacer"), cellTools(cell));
+    wrap.appendChild(head);
+    const body = el("div", "nb-md-body");
+    const ta = el("textarea", "nb-md-input"); ta.spellcheck = false; ta.value = cell.source || "";
+    const view = el("div", "nb-md-render");
+    const showView = () => {
+      view.innerHTML = mdToHtml(ta.value) || `<span class="nb-md-empty">${esc(I18N.t("Empty text cell — click to edit."))}</span>`;
+      wrap.classList.remove("editing");
+    };
+    ta.addEventListener("input", schedulePersist);
+    ta.addEventListener("blur", () => { schedulePersist(); showView(); });
+    view.addEventListener("click", () => { wrap.classList.add("editing"); ta.focus(); });
+    body.append(ta, view); wrap.appendChild(body); showView();
+    nbRefs.set(cell.id, { type: "md", getSource: () => ta.value });
+    nbCellEls.set(cell.id, wrap);
+    return wrap;
+  }
+
+  async function runCell(cell, resultEl, ed) {
+    const sql = (ed ? ed.getValue() : "").trim();
+    persistNotebooks();
+    if (!sql) { resultEl.innerHTML = ""; return; }
+    resultEl.innerHTML = `<div class="nb-running">${esc(I18N.t("Running…"))}</div>`;
+    const res = await API.query(state.db, sql, S.recordHistory, false);
+    resultEl.innerHTML = "";
+    resultEl.appendChild(notebookResultEl(res));
+    if (res.error) logQueryError(res.error, res.explanation, sql);
+    else { refreshSchema(); schedulePreview(); }
+  }
+
+  function notebookResultEl(res) {
+    if (res.error) {
+      const card = el("div", "nb-err");
+      card.appendChild(el("div", "nb-err-msg", esc(res.error)));
+      if (res.explanation) card.appendChild(el("div", "nb-err-exp", esc(res.explanation)));
+      return card;
+    }
+    const results = res.results || [];
+    if (!results.length) return el("div", "nb-msg", esc(I18N.t("Statement executed.")));
+    const frag = document.createDocumentFragment();
+    results.forEach((r) => {
+      if (r.kind === "rows") {
+        const cap = 200, rows = r.rows.slice(0, cap);
+        const t = el("table", "grid"); t.setAttribute("data-noi18n", "");
+        const htr = el("tr"); htr.appendChild(el("th", "rownum", "#"));
+        r.columns.forEach((c) => htr.appendChild(el("th", "", esc(c))));
+        const thead = el("thead"); thead.appendChild(htr); t.appendChild(thead);
+        const tb = el("tbody");
+        rows.forEach((row, i) => {
+          const tr = el("tr"); tr.appendChild(el("td", "rownum", i + 1));
+          row.forEach((v) => tr.appendChild(el("td", "",
+            v == null ? "<span class='nb-null'>NULL</span>" : isBlob(v) ? "BLOB" : esc(String(v)))));
+          tb.appendChild(tr);
+        });
+        t.appendChild(tb);
+        const wrap = el("div", "nb-grid-wrap"); wrap.appendChild(t);
+        const meta = el("div", "nb-meta",
+          esc(I18N.t("{0} rows · {1} ms", r.row_count, r.duration_ms)) +
+          (r.row_count > cap ? " · " + esc(I18N.t("showing first {0}", cap)) : ""));
+        const out = el("div", "nb-out"); out.append(wrap, meta); frag.appendChild(out);
+      } else {
+        frag.appendChild(el("div", "nb-msg",
+          esc(I18N.t("{0} row(s) affected · {1} ms", r.rows_affected, r.duration_ms))));
+      }
+    });
+    return frag;
+  }
+
+  // minimal, safe markdown → HTML (escapes first, then a small subset)
+  function mdToHtml(src) {
+    if (!src || !src.trim()) return "";
+    const inline = (s) => esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    let html = "", list = false, code = false;
+    const closeList = () => { if (list) { html += "</ul>"; list = false; } };
+    String(src).replace(/\r\n/g, "\n").split("\n").forEach((ln) => {
+      if (/^```/.test(ln)) { if (code) { html += "</code></pre>"; code = false; } else { closeList(); html += "<pre class='nb-code'><code>"; code = true; } return; }
+      if (code) { html += esc(ln) + "\n"; return; }
+      const h = /^(#{1,4})\s+(.*)$/.exec(ln);
+      if (h) { closeList(); const n = h[1].length; html += `<h${n}>${inline(h[2])}</h${n}>`; return; }
+      if (/^\s*[-*]\s+/.test(ln)) { if (!list) { html += "<ul>"; list = true; } html += `<li>${inline(ln.replace(/^\s*[-*]\s+/, ""))}</li>`; return; }
+      if (/^>\s?/.test(ln)) { closeList(); html += `<blockquote>${inline(ln.replace(/^>\s?/, ""))}</blockquote>`; return; }
+      if (/^(-{3,}|\*{3,})\s*$/.test(ln)) { closeList(); html += "<hr>"; return; }
+      if (!ln.trim()) { closeList(); return; }
+      closeList(); html += `<p>${inline(ln)}</p>`;
+    });
+    closeList(); if (code) html += "</code></pre>";
+    return html;
+  }
+
+  // cell + notebook operations
+  function addCell(type) { pullSources(); activeNb().cells.push({ id: uid(), type, source: "" }); persistNotebooks(); renderNotebook(); }
+  function deleteCell(cell) {
+    pullSources();
+    const nb = activeNb(); nb.cells = nb.cells.filter((c) => c.id !== cell.id);
+    persistNotebooks(); renderNotebook();
+  }
+  function moveCell(cell, dir) {
+    pullSources();
+    const cells = activeNb().cells, i = cells.findIndex((c) => c.id === cell.id), j = i + dir;
+    if (i < 0 || j < 0 || j >= cells.length) return;
+    [cells[i], cells[j]] = [cells[j], cells[i]];
+    persistNotebooks(); renderNotebook();
+  }
+  function switchNotebook(id) {
+    if (id === nbData.active) return;
+    pullSources(); nbData.active = id; persistNotebooks(); renderNotebook(); renderNbList();
+  }
+  function newNotebook() {
+    promptText(I18N.t("New notebook"), I18N.t("Name"), I18N.t("Notebook {0}", nbData.list.length + 1), (name) => {
+      pullSources();
+      const nb = { id: uid(), name, cells: [{ id: uid(), type: "sql", source: "" }] };
+      nbData.list.push(nb); nbData.active = nb.id; persistNotebooks(); renderNotebook(); renderNbList();
+    });
+  }
+  function renameNotebook(nb) {
+    promptText(I18N.t("Rename notebook"), I18N.t("Name"), nb.name, (name) => {
+      nb.name = name; persistNotebooks();
+      if (nb.id === nbData.active) $("#nbTitle").textContent = name;
+      renderNbList();
+    });
+  }
+  function duplicateNotebook(nb) {
+    pullSources();
+    const copy = { id: uid(), name: nb.name + " (" + I18N.t("copy") + ")",
+      cells: nb.cells.map((c) => ({ id: uid(), type: c.type, source: c.source })) };
+    nbData.list.splice(nbData.list.findIndex((n) => n.id === nb.id) + 1, 0, copy);
+    nbData.active = copy.id; persistNotebooks(); renderNotebook(); renderNbList();
+  }
+  async function deleteNotebook(nb) {
+    if (nbData.list.length <= 1) return toast("A notebook can't be deleted when it's the only one", "err");
+    if (!(await askConfirm(I18N.t("Delete the notebook “{0}”?", nb.name), { title: "Delete notebook", confirmLabel: "Delete" }))) return;
+    const wasActive = nb.id === nbData.active;
+    nbData.list = nbData.list.filter((n) => n.id !== nb.id);
+    if (wasActive) nbData.active = nbData.list[0].id;
+    persistNotebooks();
+    if (wasActive) renderNotebook();
+    renderNbList();
+  }
+  function saveCellAsSnippet() {
+    const sql = lastNbEditor ? lastNbEditor.getValue().trim() : "";
+    if (!sql) return toast("Focus a SQL cell with some SQL first", "err");
+    snippetDialog(null, sql);
+  }
+  async function runAllCells() {
+    for (const c of activeNb().cells)
+      if (c.type === "sql" && nbRunners.has(c.id)) await nbRunners.get(c.id)();
+  }
+  function exportNotebook() {
+    pullSources();
+    const nb = activeNb();
+    const payload = { app: "SequenceLab", kind: "notebook", version: APP_VERSION, exported: new Date().toISOString(),
+      notebook: { name: nb.name, cells: nb.cells.map((c) => ({ type: c.type, source: c.source })) } };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    triggerDownload(URL.createObjectURL(blob), (nb.name || "notebook").replace(/[^\w.-]+/g, "_") + ".slnb");
+  }
+  function importNotebook() {
+    const input = el("input"); input.type = "file"; input.accept = ".slnb,application/json,.json";
+    input.onchange = async () => {
+      const f = input.files[0]; if (!f) return;
+      let parsed; try { parsed = JSON.parse(await f.text()); } catch (_) { parsed = null; }
+      const src = parsed && parsed.notebook;
+      if (!src || !Array.isArray(src.cells)) return toast("Not a SequenceLab notebook file", "err");
+      pullSources();
+      const nb = { id: uid(), name: src.name || I18N.t("Imported notebook"),
+        cells: src.cells.filter((c) => c && (c.type === "sql" || c.type === "md"))
+          .map((c) => ({ id: uid(), type: c.type, source: String(c.source || "") })) };
+      if (!nb.cells.length) nb.cells.push({ id: uid(), type: "sql", source: "" });
+      nbData.list.push(nb); nbData.active = nb.id; persistNotebooks(); renderNotebook(); renderNbList();
+    };
+    input.click();
+  }
+  // small text-input modal (notebook naming)
+  function promptText(title, label, initial, onOk) {
+    const body = el("div", "field");
+    body.appendChild(el("label", null, esc(label)));
+    const input = el("input", "mini-input"); input.value = initial || "";
+    body.appendChild(input);
+    const ok = mkBtn(I18N.t("OK"), "primary", () => { const v = input.value.trim(); if (v) { closeModal(); onOk(v); } });
+    openModal(title, body, [mkBtn(I18N.t("Cancel"), "ghost", closeModal), ok]);
+    setTimeout(() => { input.focus(); input.select(); input.onkeydown = (e) => { if (e.key === "Enter") ok.click(); }; }, 30);
+  }
+  function initNotebook() {
+    $("#nbNew").onclick = newNotebook;
+    $("#nbSnipAdd").onclick = saveCellAsSnippet;
+    $("#nbExport").onclick = exportNotebook;
+    $("#nbImport").onclick = importNotebook;
+    $("#nbRunAll").onclick = runAllCells;
+    $("#nbAddSql").onclick = () => addCell("sql");
+    $("#nbAddMd").onclick = () => addCell("md");
+  }
+
   // ==================================================== SINGLE-KEY SHORTCUTS
   // Flask.do-style delayed single-key shortcuts. When no field is focused, a
   // printable key is held briefly: if a 2nd printable key arrives within the
@@ -4862,6 +5305,7 @@
     e: () => railSelect("editor"),
     b: () => railSelect("browse"),
     d: () => railSelect("diagram"),
+    n: () => railSelect("notebook"),
   };
   let keyBuffer = "";
   let keyTimer = null;
@@ -4944,6 +5388,7 @@
     applySettings();
     initConsole();
     initEditor();
+    initNotebook();
     initSingleKeyShortcuts();
     // editor lives in an i18n-excluded zone, so set its placeholder explicitly
     $("#sqlInput").placeholder = I18N.t("-- Write SQL here.  Ctrl+Enter to run.");

@@ -150,6 +150,7 @@ a bottom **status bar** (db path · SQLite version · last run) that **doubles a
 - rich **Settings** (slide toggles): **language**, tab width, word wrap, autocomplete behavior, editor font size, auto-format on run, **confirm destructive statements**, **read-only mode**, **preview writes before applying**, Browse page size, max rows per result, history recording/limit, NULL display, cell truncation, status bar, CSV delimiter/header defaults, **range-copy separator**, and **auto-backup before destructive SQL** (the last 5 copies per db are kept in IndexedDB)
 - **installable PWA**: over HTTPS a service worker caches the whole static shell (scripts, fonts, SQLite WASM) so the app installs to its own window and **loads & runs fully offline**; the browser chrome color tracks the active theme
 - **versioned releases**: each feature update bumps the app version and shows a one-time **"What's new"** popup of that version's changes; the **full history** lives in Settings → About → **Update log** (and the Help → About dialog)
+- **workspace export / import** (File menu): bundle your browser-side workspace — settings, query tabs, pins, saved filters, diagram layouts and notebooks — into one JSON file to back up or move between browsers/machines (databases themselves are exported separately, as `.db` or a SQL dump)
 
 **Console** (click the bottom **status bar** to open the bottom drawer)
 - a **Logs** tab — a timestamped, running feed of errors, query outcomes ("query ran successfully"), and app events
@@ -167,6 +168,13 @@ a bottom **status bar** (db path · SQLite version · last run) that **doubles a
 - **legend & notes** (Notes rail sub-button): draggable **sticky notes** on the canvas (new ones cascade like OS windows), color **tags** on table cards (picked in the table editor), a legend naming what each color means, and bulk note deletion (all, or per color)
 - **export the diagram as PNG or SVG** — sticky notes and tag stripes are drawn in too, with the table cards' **rounded corners** preserved
 - left panel **schema editor**: add / rename / drop columns, **change column types**, **manage indexes**, **manage triggers** (view SQL / create / drop), rename / drop / create tables
+
+**Notebook** (rail icon)
+- a **document of cells** — runnable **SQL cells** and **markdown text cells** — for building queries alongside notes, like a lightweight SQL notebook
+- each SQL cell runs against the active database with **results shown inline** (capped table + row count / timing), full syntax highlighting and autocomplete; **Run all** runs every SQL cell top-to-bottom
+- text cells render **markdown** (headings, bold/italic, lists, code, links, quotes) — click to edit, click away to render
+- **add / delete / reorder** cells; keep **multiple named notebooks** and switch between them; **export / import** a notebook as a `.slnb` file (JSON inside)
+- notebooks persist per-browser (and travel with a workspace export)
 
 **Accessibility**
 - toasts announce via `aria-live`; icon buttons carry `aria-label`s

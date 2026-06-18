@@ -55,6 +55,13 @@
             <button class="rail-btn" data-rail="dnotes" data-icon="note" title="Legend & notes"><span class="rail-label">Notes</span></button>
           </div>
         </div>
+        <div class="rail-group" id="railGroupNotebook">
+          <button class="rail-btn" data-rail="notebook" data-icon="note" title="SQL notebook"><span class="rail-label">Notebook</span></button>
+          <div class="rail-sub">
+            <button class="rail-btn" data-rail="noutline" data-icon="layout" title="Outline"><span class="rail-label">Outline</span></button>
+            <button class="rail-btn" data-rail="nsnippets" data-icon="bookmark" title="Snippets"><span class="rail-label">Snippets</span></button>
+          </div>
+        </div>
         <div class="rail-spacer"></div>
         <button class="rail-btn" id="btnSettings" data-icon="gear" title="Settings"><span class="rail-label">Settings</span></button>
       </div>
@@ -247,6 +254,46 @@
           <div class="er-empty" id="erEmpty" hidden>
             <div class="empty-emoji">▦</div>
             <p>No tables to diagram yet.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== NOTEBOOK VIEW ===================== -->
+    <div class="notebook-view" id="notebookView" hidden>
+      <aside class="notebook-side">
+        <div class="side-sub-panel" data-ns="notebooks">
+          <div class="side-toolbar">
+            <span class="side-hint">Notebooks</span>
+            <button id="nbNew" class="btn icon" data-icon="plus" title="New notebook"></button>
+          </div>
+          <div id="nbList" class="nb-list"></div>
+        </div>
+        <div class="side-sub-panel" data-ns="outline" hidden>
+          <div class="side-toolbar"><span class="side-hint">Outline</span></div>
+          <div id="nbOutline" class="nb-outline"></div>
+        </div>
+        <div class="side-sub-panel" data-ns="snippets" hidden>
+          <div class="side-toolbar">
+            <span class="side-hint">Snippets</span>
+            <button id="nbSnipAdd" class="btn icon" data-icon="plus" title="Save current SQL cell as a snippet"></button>
+          </div>
+          <div id="nbSnippetList" class="snippet-list"></div>
+        </div>
+      </aside>
+      <div class="notebook-main">
+        <div class="nb-bar">
+          <span class="nb-title" id="nbTitle"></span>
+          <span class="nb-bar-spacer"></span>
+          <button id="nbExport" class="btn icon" data-icon="download" title="Export notebook"></button>
+          <button id="nbImport" class="btn icon" data-icon="upload" title="Import notebook"></button>
+          <button id="nbRunAll" class="btn ghost" data-icon="play">Run all</button>
+        </div>
+        <div class="nb-scroll">
+          <div class="nb-cells" id="nbCells"></div>
+          <div class="nb-add">
+            <button id="nbAddSql" class="btn ghost" data-icon="plus">SQL cell</button>
+            <button id="nbAddMd" class="btn ghost" data-icon="plus">Text cell</button>
           </div>
         </div>
       </div>
